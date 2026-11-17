@@ -22,6 +22,9 @@ model User {
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
   accounts      Account[]
+  sapSystems    SapSystem[]
+  sapAuditLogs  SapAuditLog[]
+  sapChangePlans SapChangePlan[]
 
   @@unique([email])
   @@map("user")
@@ -73,4 +76,146 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+/// A connection to one SAP S/4HANA on-premise system (OData V4 via ICF).
+///
+/// Scoped to a user: each Better Auth user manages their own systems, and
+/// every read and write filters on userId.
+///
+/// Deliberately has NO credential fields. SAP usernames, passwords,
+/// SAP_SESSIONID cookies and x-csrf-token values are never stored in the
+/// database; an active SAP session lives only in an encrypted HttpOnly
+/// cookie (see lib/sap-session.ts).
+model SapSystem {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  /// Scheme and host (and port), e.g. https://s4dev.company.local:44300
+  baseUrl     String
+  /// SAP client (Mandant), e.g. "100"; sent as ?sap-client=
+  sapClient   String
+  /// OData V4 service root below baseUrl, e.g. /sap/opu/odata4/sap/api_salesorder/srvd_a2x/sap/salesorder/0001
+  servicePath String
+  /// "DEV" | "QAS" | "PRD"; shown on every change plan, with a warning for PRD.
+  environment String   @default("DEV")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  chatSessions ChatSession[]
+  changePlans  SapChangePlan[]
+
+  @@index([userId])
+}
+
+/// Every HTTP request the chat agent sends to SAP (reads, CSRF fetches,
+/// approved writes). requestUrl is relative to the service root: no host, no
+/// credentials. chatId and sapSystemId are plain values so the log survives
+/// when the chat or system is deleted.
+model SapAuditLog {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatId         String?
+  sapSystemId    String?
+  toolName       String
+  httpMethod     String
+  requestUrl     String
+  /// JSON body sent with the request, if any.
+  requestPayload String?
+  responseStatus Int
+  errorMessage   String?
+  durationMs     Int
+  createdAt      DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([chatId])
+}
+
+/// A write the model proposed. Nothing is sent to SAP until the user approves
+/// it in the chat (human in the loop). Holds no credentials, tokens or cookies.
+model SapChangePlan {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sapSystemId   String
+  sapSystem     SapSystem @relation(fields: [sapSystemId], references: [id], onDelete: Cascade)
+  chatId        String?
+  /// "UPDATE" | "CREATE" | "FLAG_DELETION" | "DELETE"
+  operation     String
+  /// "PATCH" | "POST" | "DELETE"
+  method        String
+  entitySet     String
+  /// Request path relative to the service root, keys already encoded.
+  path          String
+  /// ETag read right before the plan was made; sent as If-Match.
+  etag          String?
+  /// JSON body to send (PATCH: only the changed properties).
+  payload       String?
+  /// JSON array of { field, label, current, next }.
+  diff          String
+  reason        String
+  /// "PENDING" | "REJECTED" | "EXECUTED" | "FAILED" | "EXPIRED"
+  status        String    @default("PENDING")
+  resultStatus  Int?
+  resultMessage String?
+  decidedBy     String?
+  decidedAt     DateTime?
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, status])
+  @@index([chatId])
+}
+
+/// One configured LLM provider. Only one row should have isActive = true.
+/// apiKeyEncrypted holds an AES-256-GCM payload produced by lib/crypto.ts.
+model AiProviderConfig {
+  id              String   @id @default(cuid())
+  name            String
+  /// "OPENAI" | "ANTHROPIC" | "AZURE_OPENAI" | "CUSTOM_OPENAI_COMPATIBLE"
+  provider        String
+  baseUrl         String?
+  apiKeyEncrypted String
+  modelName       String
+  apiVersion      String?
+  temperature     Float    @default(0.1)
+  maxTokens       Int      @default(4096)
+  topP            Float?   @default(1.0)
+  timeoutSeconds  Int      @default(60)
+  isActive        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+model ChatSession {
+  id          String        @id @default(cuid())
+  title       String        @default("New Chat")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  messages    ChatMessage[]
+  /// SAP system the chat's product-data tools run against, if any.
+  sapSystemId String?
+  sapSystem   SapSystem?    @relation(fields: [sapSystemId], references: [id], onDelete: SetNull)
+
+  @@index([updatedAt])
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /// "user" | "assistant" | "system"
+  role      String
+  content   String
+  modelUsed String?
+  /// JSON: { toolRuns, changePlanIds } shown with an assistant message.
+  metadata  String?
+  createdAt DateTime    @default(now())
+
+  @@index([sessionId, createdAt])
 }

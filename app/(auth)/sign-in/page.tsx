@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import {
   Alert, AlertDescription, Button, Card, CardContent, CardDescription,
   CardFooter, CardHeader, CardTitle, Input, Label, Spinner,
@@ -10,6 +11,7 @@ import {
 import { authClient } from "@/lib/auth/auth-client"
 
 const SignIn = () => {
+  const router = useRouter()
   const { data: session, isPending } = authClient.useSession()
   const [error, setError] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
@@ -24,7 +26,13 @@ const SignIn = () => {
       password: String(form.get("password")),
     })
     setBusy(false)
-    if (error) setError(error.message ?? "Sign-in failed. Check your email and password.")
+    if (error) {
+      setError(error.message ?? "Sign-in failed. Check your email and password.")
+      return
+    }
+    // Back to the page that asked for sign-in (?next=/path). Same-site paths only.
+    const next = new URLSearchParams(window.location.search).get("next")
+    if (next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\")) router.replace(next)
   }
 
   async function handleSignOut() {

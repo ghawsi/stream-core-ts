@@ -46,8 +46,8 @@ export abstract class cl_param_container {
       }
     }
   }
-  public get_range() {}
-  public set_range() {}
+  public get_range(){}
+  public set_range(){}
   public get_table() {}
   public set_table() {}
   public set_parameter_string() {}

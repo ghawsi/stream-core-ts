@@ -17,3 +17,4 @@ export interface S_EAV{
 
 export type kyra_t_parameter = S_EAV[];
 export type kyra_parameter = string;
+export type kyra_object_id = string;

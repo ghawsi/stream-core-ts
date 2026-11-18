@@ -5,6 +5,7 @@ import { getAuthSession } from "@/lib/auth/session"
 import { prisma } from "@/lib/db"
 import { deleteSapSession, readSapSession, writeSapSession } from "@/lib/sap-session"
 import { OPERATION_LABELS, type ChangePlanView } from "@/lib/sap/agent-types"
+import { describeODataPath, humanizeName } from "@/lib/sap/business"
 import { planInclude, toChangePlanView } from "@/lib/sap/change-plans"
 import { SapClient, SapSessionExpiredError, SapTransportError } from "@/lib/sap/client"
 import { authRequiredResponse, sapError } from "@/lib/sap/odata"
@@ -12,6 +13,19 @@ import { authRequiredResponse, sapError } from "@/lib/sap/odata"
 type Context = { params: Promise<{ planId: string }> }
 
 const decisionSchema = z.object({ decision: z.enum(["approve", "reject"]) })
+
+/** Why SAP refused a change, in business words; SAP's own message follows. */
+const REFUSAL: Record<number, string> = {
+  400: "SAP refused the values",
+  403: "Your SAP authorization does not allow this change",
+  404: "The record no longer exists in SAP",
+  405: "This API does not support this change",
+  409: "The change conflicts with existing data",
+  501: "This API does not support this change",
+}
+
+/** "2026-11-18 09:45 UTC": the note is stored once and read in any time zone. */
+const noteTime = (date: Date) => `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`
 
 export type ChangePlanDecisionResponse =
   | { ok: true; plan: ChangePlanView; note: { id: string; content: string } | null }
@@ -53,7 +67,7 @@ export async function POST(request: Request, context: Context) {
   const system = plan.sapSystem
   const approver = `${authSession.user.name} <${authSession.user.email}>`
   const decidedAt = new Date()
-  const target = `${OPERATION_LABELS[plan.operation as ChangePlanView["operation"]]} \`${plan.path}\` in ${system.name} (client ${system.sapClient}, ${system.environment})`
+  const target = `${OPERATION_LABELS[plan.operation as ChangePlanView["operation"]]} ${describeODataPath(plan.path)} in ${system.name} (client ${system.sapClient}, ${system.environment})`
 
   const addNote = async (content: string) => {
     if (!plan.chatId) return null
@@ -74,7 +88,7 @@ export async function POST(request: Request, context: Context) {
       data: { status: "REJECTED", decidedBy: approver, decidedAt },
       include: planInclude,
     })
-    const note = await addNote(`**Change plan rejected.** ${target} was not sent to SAP. Rejected by ${authSession.user.name} at ${decidedAt.toISOString()}.`)
+    const note = await addNote(`**Change rejected.** ${target} was not sent to SAP. Rejected by ${authSession.user.name} at ${noteTime(decidedAt)}.`)
     return json({ ok: true, plan: toChangePlanView(rejected), note })
   }
 
@@ -103,14 +117,21 @@ export async function POST(request: Request, context: Context) {
     const messages = response.sapMessages.map((message) => `${message.code ? `${message.code}: ` : ""}${message.message}`)
     if (response.ok) {
       status = "EXECUTED"
-      resultMessage = [`${plan.method === "POST" ? "Created" : plan.method === "DELETE" ? "Deleted" : "Updated"} (HTTP ${response.status}).`, ...messages].join(" ")
+      resultMessage = [
+        plan.method === "POST" ? "SAP created the record." : plan.method === "DELETE" ? "SAP deleted the record." : "SAP saved the change.",
+        ...messages,
+      ].join(" ")
     } else if (response.status === 412) {
       resultMessage =
-        "HTTP 412: the record was changed in SAP after this plan was prepared, so nothing was written. Ask the assistant to read the record again and prepare a new plan."
+        "Someone changed this record in SAP after the change was prepared, so nothing was written. Ask the assistant to read the record again and prepare the change anew."
     } else {
       const error = response.error
       const details = error?.details.map((detail) => detail.message).filter(Boolean) ?? []
-      resultMessage = [`HTTP ${response.status}${error?.code ? ` ${error.code}` : ""}: ${error?.message ?? "no details"}`, ...details].join(" · ")
+      // SAP's message number helps the support team; the HTTP status stays in resultStatus.
+      resultMessage = [
+        `${REFUSAL[response.status] ?? "SAP did not accept the change"}: ${error?.message ? `"${error.message}"` : "no details"}${error?.code ? ` (SAP message ${error.code})` : ""}`,
+        ...details,
+      ].join(" · ")
     }
   } catch (error) {
     if (error instanceof SapSessionExpiredError) {
@@ -136,11 +157,14 @@ export async function POST(request: Request, context: Context) {
   })
 
   const view = toChangePlanView(updated)
-  const changes = view.diff.map((item) => `- ${item.label ? `${item.label} (\`${item.field}\`)` : `\`${item.field}\``}: ${item.current} → **${item.next}**`).join("\n")
+  const changes = view.diff
+    .filter((item) => item.field !== "(record)")
+    .map((item) => `- ${item.label ?? humanizeName(item.field)}: ${item.current} → **${item.next}**`)
+    .join("\n")
   const note = await addNote(
     status === "EXECUTED"
-      ? `**Change applied.** ${target}\n\n${changes}\n\n${resultMessage}\n\nApproved by ${authSession.user.name} at ${decidedAt.toISOString()}. SAP records the change under the signed-in SAP user.`
-      : `**Change not applied.** ${target}\n\n${resultMessage}\n\nApproved by ${authSession.user.name} at ${decidedAt.toISOString()}.`
+      ? `**Change applied.** ${target}\n\n${changes ? `${changes}\n\n` : ""}${resultMessage}\n\nApproved by ${authSession.user.name} at ${noteTime(decidedAt)}. SAP records the change under your SAP user.`
+      : `**Change not applied.** ${target}\n\n${resultMessage}\n\nApproved by ${authSession.user.name} at ${noteTime(decidedAt)}.`
   )
   return json({ ok: true, plan: view, note })
 }

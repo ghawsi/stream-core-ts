@@ -6,11 +6,15 @@ import { Badge, Button, cn, Collapsible, CollapsibleContent, CollapsibleTrigger,
 
 import type { ToolRun } from "@/lib/sap/agent-types"
 
-/** Status line per SAP tool call; expands to show the arguments and the exact OData requests. */
+/**
+ * One line per SAP lookup in business words ("Reading Product EF-MAT");
+ * expands to the technical details (parameters and the exact OData requests)
+ * for consultants and support.
+ */
 export function SapToolRuns({ runs }: { runs: ToolRun[] }) {
   if (runs.length === 0) return null
   return (
-    <div className="grid gap-1.5" aria-label="SAP requests">
+    <div className="grid gap-1.5" aria-label="SAP lookups">
       {runs.map((run) => (
         <ToolRunItem key={run.id} run={run} />
       ))}
@@ -29,7 +33,7 @@ function ToolRunItem({ run }: { run: ToolRun }) {
           type="button"
           variant="ghost"
           className="h-auto w-full justify-start gap-2 px-3 py-2 text-left font-normal whitespace-normal hover:bg-muted"
-          aria-label={`${run.label}. ${run.summary ?? (run.status === "running" ? "Running" : "")}. ${open ? "Hide" : "Show"} details`}
+          aria-label={`${run.label}. ${run.summary ?? (run.status === "running" ? "Running" : "")}. ${open ? "Hide" : "Show"} technical details`}
         >
           {run.status === "running" ? (
             <Spinner aria-hidden="true" />
@@ -50,9 +54,10 @@ function ToolRunItem({ run }: { run: ToolRun }) {
       </CollapsibleTrigger>
       <CollapsibleContent className="grid gap-3 border-t px-3 py-3">
         {run.summary ? <p className={cn("text-xs", run.status === "error" ? "text-destructive" : "text-muted-foreground")}>{run.summary}</p> : null}
+        <p className="text-xs font-medium">Technical details</p>
         {args.length > 0 ? (
           <div className="grid gap-1">
-            <p className="text-xs font-medium text-muted-foreground">Arguments</p>
+            <p className="text-xs font-medium text-muted-foreground">Parameters</p>
             <dl className="grid gap-1 font-mono text-xs">
               {args.map(([name, value]) => (
                 <div key={name} className="flex gap-2">
@@ -65,7 +70,9 @@ function ToolRunItem({ run }: { run: ToolRun }) {
         ) : null}
         <div className="grid gap-1">
           <p className="text-xs font-medium text-muted-foreground">
-            {run.requests.length === 0 ? "No request sent to SAP (answered from cached metadata or rejected before sending)" : "Requests"}
+            {run.requests.length === 0
+              ? "Nothing was sent to SAP (answered from the service description already loaded, or stopped before sending)"
+              : "SAP requests"}
           </p>
           {run.requests.map((request, index) => (
             <div key={index} className="flex flex-wrap items-start gap-2 font-mono text-xs">

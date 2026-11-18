@@ -24,13 +24,14 @@ import {
 } from "@boilerplate/ui"
 
 import type { ActiveModelSummary } from "@/lib/ai/active-model"
+import { businessAreaFor } from "@/lib/sap/business"
 import { CHAT_MESSAGE_MAX_LENGTH } from "@/lib/validations/chat"
 
 const MAX_HEIGHT_PX = 240 // about eight lines, then the textarea scrolls
 const NO_SYSTEM = "none"
 
 /** An SAP system the chat can query (configured in /settings/sap/systems). */
-export type SapSystemOption = { id: string; name: string; sapClient: string; environment: string; isActive: boolean }
+export type SapSystemOption = { id: string; name: string; sapClient: string; environment: string; isActive: boolean; servicePath: string }
 
 export type ClaudePromptInputProps = {
   value: string
@@ -58,7 +59,7 @@ export function ClaudePromptInput({
   sapSystems,
   sapSystemId,
   onSapSystemChange,
-  placeholder = "Ask about ABAP, CDS, OData or S/4HANA processes…",
+  placeholder = "Ask about a business process, master data or postings…",
   autoFocus,
   className,
 }: ClaudePromptInputProps) {
@@ -153,7 +154,7 @@ export function ClaudePromptInput({
   )
 }
 
-/** Chooses the SAP system whose product master data the chat may read and change. */
+/** Chooses the SAP system whose live business data the chat may read and change. */
 function SapSystemPicker({
   systems,
   value,
@@ -182,7 +183,7 @@ function SapSystemPicker({
         </InputGroupButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-64">
-        <DropdownMenuLabel>SAP system for product data</DropdownMenuLabel>
+        <DropdownMenuLabel>SAP system for live business data</DropdownMenuLabel>
         {systems === null ? (
           <DropdownMenuItem asChild>
             <Link href="/sign-in?next=%2Fchat">Sign in to use SAP data</Link>
@@ -196,7 +197,7 @@ function SapSystemPicker({
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate">{system.name}</span>
                     <span className="text-xs text-muted-foreground">
-                      client {system.sapClient} · {system.environment}
+                      {businessAreaFor(system.servicePath).title} · client {system.sapClient} · {system.environment}
                       {system.isActive ? "" : " · turned off"}
                     </span>
                   </span>

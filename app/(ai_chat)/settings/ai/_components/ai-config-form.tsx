@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CheckCircle2Icon, ChevronDownIcon, EyeIcon, EyeOffIcon, PlugZapIcon, RefreshCwIcon, XCircleIcon } from "lucide-react"
+import { CheckCircle2Icon, ChevronDownIcon, ExternalLinkIcon, EyeIcon, EyeOffIcon, PlugZapIcon, RefreshCwIcon, XCircleIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
   Accordion,
@@ -41,6 +41,14 @@ import {
   Label,
   RadioGroup,
   RadioGroupItem,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
   Slider,
   Spinner,
   Switch,
@@ -51,12 +59,15 @@ import type { ListModelsResponse } from "@/app/api/settings/ai/models/route"
 import type { TestConnectionResponse } from "@/app/api/settings/ai/test/route"
 import {
   AI_PROVIDERS,
+  API_KEY_LINKS,
   API_KEY_OPTIONAL,
+  COMPATIBLE_SERVICES,
   BASE_URL_PLACEHOLDERS,
   BASE_URL_REQUIRED,
   DEFAULT_AZURE_API_VERSION,
   DEFAULT_BASE_URLS,
   DEFAULT_TIMEOUT_SECONDS,
+  detectCompatibleService,
   isAiProvider,
   MODEL_LIST_SUPPORTED,
   MODEL_PRESETS,
@@ -170,6 +181,23 @@ export function AiConfigForm({
   }
 
   const configId = config?.id
+  /** "Other provider": picking a service fills in its endpoint, a model and, if empty, the name. */
+  function changeService(serviceId: string) {
+    const next = COMPATIBLE_SERVICES.find((item) => item.id === serviceId)
+    if (!next) return
+    setForm((current) => {
+      const previous = detectCompatibleService(current.baseUrl)
+      const modelName =
+        !current.modelName || previous.models.includes(current.modelName) ? (next.models[0] ?? "") : current.modelName
+      const name = !current.name.trim() || current.name === previous.label ? (next.id === "custom" ? "" : next.label) : current.name
+      return { ...current, baseUrl: next.baseUrl, modelName, name }
+    })
+    setErrors({})
+    setTestResult(null)
+    setModels(null)
+    setModelsError(null)
+  }
+
   /** Loads the provider's model list (installed models for Ollama). */
   const loadModels = React.useCallback(
     async (target: { provider: AiProvider; baseUrl: string; apiKey: string }) => {
@@ -296,11 +324,22 @@ export function AiConfigForm({
     [hasDescription ? fieldId(`${name}-description`) : null, error(name as keyof FormState) ? fieldId(`${name}-error`) : null]
       .filter(Boolean)
       .join(" ") || undefined
-  const presets = MODEL_PRESETS[form.provider]
-  const baseUrlRequired = BASE_URL_REQUIRED.has(form.provider)
-  const keyOptional = API_KEY_OPTIONAL.has(form.provider)
-  const canListModels = MODEL_LIST_SUPPORTED.has(form.provider)
   const isOllama = form.provider === "OLLAMA"
+  const isGemini = form.provider === "GEMINI"
+  // "Other provider": the known service behind the base URL (DeepSeek, Groq, …) or a custom endpoint.
+  const service = form.provider === "CUSTOM_OPENAI_COMPATIBLE" ? detectCompatibleService(form.baseUrl) : null
+  const presets = service ? service.models : MODEL_PRESETS[form.provider]
+  const baseUrlRequired = BASE_URL_REQUIRED.has(form.provider)
+  const keyOptional = service ? Boolean(service.local) || service.id === "custom" : API_KEY_OPTIONAL.has(form.provider)
+  const keyLink = service?.keyUrl ? { label: service.label, url: service.keyUrl } : API_KEY_LINKS[form.provider]
+  const canListModels = MODEL_LIST_SUPPORTED.has(form.provider)
+  const sourceLabel = service && service.id !== "custom" ? service.label : PROVIDER_LABELS[form.provider]
+  // Long lists (OpenRouter has hundreds of models) are narrowed by what is typed in the model field.
+  const modelQuery = form.modelName.trim().toLowerCase()
+  const filterModels = Boolean(models && models.length > 12 && modelQuery && !models.some((model) => model.id.toLowerCase() === modelQuery))
+  const visibleModels = filterModels
+    ? (models ?? []).filter((model) => `${model.id} ${model.label ?? ""}`.toLowerCase().includes(modelQuery))
+    : (models ?? [])
 
   return (
     <Card>
@@ -367,6 +406,41 @@ export function AiConfigForm({
                 </RadioGroup>
               </Field>
 
+              {service ? (
+                <Field>
+                  <FieldLabel htmlFor={fieldId("service")}>Service</FieldLabel>
+                  <Select value={service.id} onValueChange={changeService}>
+                    <SelectTrigger id={fieldId("service")} className="w-full sm:w-80" aria-describedby={fieldId("service-description")}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper">
+                      <SelectGroup>
+                        <SelectLabel>Cloud APIs</SelectLabel>
+                        {COMPATIBLE_SERVICES.filter((item) => !item.local && item.id !== "custom").map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                      <SelectSeparator />
+                      <SelectGroup>
+                        <SelectLabel>On your machine or network</SelectLabel>
+                        {COMPATIBLE_SERVICES.filter((item) => item.local).map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                      <SelectSeparator />
+                      <SelectItem value="custom">Custom endpoint</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription id={fieldId("service-description")}>
+                    {service.description} Any service with an OpenAI-compatible API works; pick Custom endpoint for one not listed.
+                  </FieldDescription>
+                </Field>
+              ) : null}
+
               <Field data-invalid={error("baseUrl") ? true : undefined}>
                 <FieldLabel htmlFor={fieldId("baseUrl")}>
                   {isOllama ? "Ollama URL" : `API endpoint / base URL${baseUrlRequired ? "" : " (optional)"}`}
@@ -385,11 +459,15 @@ export function AiConfigForm({
                 <FieldDescription id={fieldId("baseUrl-description")}>
                   {isOllama
                     ? "Where Ollama listens. The app server must reach it; from a Docker container use http://host.docker.internal:11434."
-                    : form.provider === "AZURE_OPENAI"
-                      ? "The endpoint of your Azure OpenAI resource."
-                      : form.provider === "CUSTOM_OPENAI_COMPATIBLE"
-                        ? "The URL before /chat/completions, for example http://localhost:1234/v1 for LM Studio."
-                        : "Filled in for you. Change it only to use a proxy or gateway."}
+                    : isGemini
+                      ? "The Gemini API endpoint, filled in for you."
+                      : form.provider === "AZURE_OPENAI"
+                        ? "The endpoint of your Azure OpenAI resource."
+                        : service && service.id !== "custom"
+                          ? `Filled in for ${service.label}. Change it only for a proxy or a regional endpoint.`
+                          : service
+                            ? "The URL before /chat/completions, for example https://api.example.com/v1."
+                            : "Filled in for you. Change it only to use a proxy or gateway."}
                 </FieldDescription>
                 <FieldError id={fieldId("baseUrl-error")}>{error("baseUrl")}</FieldError>
               </Field>
@@ -423,7 +501,7 @@ export function AiConfigForm({
                     type={showKey ? "text" : "password"}
                     value={form.apiKey}
                     onChange={(event) => set("apiKey", event.target.value)}
-                    placeholder={isEdit ? config.maskedApiKey : keyOptional ? "Not needed" : "sk-…"}
+                    placeholder={isEdit ? config.maskedApiKey : keyOptional ? "Not needed" : isGemini ? "AQ.… or AIza…" : "sk-…"}
                     autoComplete="off"
                     spellCheck={false}
                     className="font-mono"
@@ -442,11 +520,34 @@ export function AiConfigForm({
                   </InputGroupAddon>
                 </InputGroup>
                 <FieldDescription id={fieldId("apiKey-description")}>
-                  {isOllama
-                    ? "Ollama needs no key. Enter one only if a proxy in front of Ollama asks for it."
-                    : isEdit
-                      ? "Leave empty to keep the saved key. A new value replaces it."
-                      : "Stored encrypted with AES-256-GCM."}
+                  {isOllama ? (
+                    "Ollama needs no key. Enter one only if a proxy in front of Ollama asks for it."
+                  ) : (
+                    <>
+                      {isEdit
+                        ? "Leave empty to keep the saved key. A new value replaces it."
+                        : service?.local
+                          ? "Usually not needed for a local server."
+                          : "Stored encrypted with AES-256-GCM."}
+                      {keyLink ? (
+                        <>
+                          {" "}
+                          {isGemini ? "Create a free key in " : "Create a key in "}
+                          <a
+                            href={keyLink.url}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-4"
+                          >
+                            {keyLink.label}
+                            <ExternalLinkIcon className="size-3" aria-hidden="true" />
+                            <span className="sr-only">(opens in a new tab)</span>
+                          </a>
+                          .
+                        </>
+                      ) : null}
+                    </>
+                  )}
                 </FieldDescription>
                 <FieldError id={fieldId("apiKey-error")}>{error("apiKey")}</FieldError>
               </Field>
@@ -486,15 +587,18 @@ export function AiConfigForm({
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <InputGroupButton size="xs" variant="secondary">
-                            {models && models.length > 0 ? `Models (${models.length})` : "Presets"}
+                            {models && models.length > 0 ? `Models (${filterModels ? `${visibleModels.length}/` : ""}${models.length})` : "Presets"}
                             <ChevronDownIcon aria-hidden="true" />
                           </InputGroupButton>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="max-h-80 min-w-56 overflow-y-auto">
                           {models && models.length > 0 ? (
                             <DropdownMenuGroup>
-                              <DropdownMenuLabel>{isOllama ? "Installed in Ollama" : `Available from ${PROVIDER_LABELS[form.provider]}`}</DropdownMenuLabel>
-                              {models.map((model) => (
+                              <DropdownMenuLabel>
+                                {isOllama ? "Installed in Ollama" : `Available from ${sourceLabel}`}
+                                {filterModels ? ` · ${visibleModels.length} matching “${form.modelName.trim()}”` : ""}
+                              </DropdownMenuLabel>
+                              {visibleModels.map((model) => (
                                 <DropdownMenuItem key={model.id} onSelect={() => set("modelName", model.id)} className="flex-col items-start gap-0">
                                   <span className="font-mono">{model.id}</span>
                                   {model.label || model.detail ? (
@@ -536,9 +640,15 @@ export function AiConfigForm({
                           : models
                             ? `${models.length} model${models.length === 1 ? "" : "s"} installed. Pick one or type a name.`
                             : "Pick an installed model or type a name."
-                      : models
-                        ? `${models.length} model${models.length === 1 ? "" : "s"} available with this key. Pick one or type any name.`
-                        : "Pick a preset, load the models your key can use, or type any model name."}
+                      : `${
+                          models
+                            ? `${models.length} model${models.length === 1 ? "" : "s"} available with this key. Pick one or type any name.`
+                            : "Pick a preset, load the models your key can use, or type any model name."
+                        }${
+                          isGemini
+                            ? " Names ending in -latest always point to Google's current model; numbered versions such as gemini-2.5-flash are withdrawn over time."
+                            : ""
+                        }`}
                 </FieldDescription>
                 {modelsError ? (
                   <p className="text-sm text-destructive" role="status">

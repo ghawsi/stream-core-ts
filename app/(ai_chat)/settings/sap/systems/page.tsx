@@ -18,8 +18,9 @@ export default function SapSystemsPage() {
       <div className="grid gap-1">
         <h2 className="text-2xl font-semibold tracking-tight">SAP systems</h2>
         <p className="text-muted-foreground">
-          SAP S/4HANA on-premise systems reached through OData V4. Your SAP user and password are asked for only when a
-          request needs them, and are kept in an encrypted session cookie, never in the database.
+          The SAP S/4HANA on-premise systems the chat can work with, each through a released API (OData V4) such as Product
+          or Sales Order. Your SAP user and password are asked for only when a request needs them, and are kept in an
+          encrypted session cookie, never in the database.
         </p>
       </div>
       <Suspense fallback={<SystemsSkeleton />}>

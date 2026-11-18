@@ -83,7 +83,7 @@ export function ChatSidebar({
             <SidebarMenuItem>
               <div className="flex h-8 items-center gap-2 px-2 group-data-[collapsible=icon]:hidden">
                 <MessageSquareIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-                <span className="truncate text-sm font-semibold">SAP S/4HANA Assistant</span>
+                <span className="truncate text-sm font-semibold">SAP Business Assistant</span>
               </div>
             </SidebarMenuItem>
             <SidebarMenuItem>

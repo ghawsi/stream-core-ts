@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CheckIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, TriangleAlertIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
   Alert,
@@ -16,6 +16,10 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
+  cn,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
   Spinner,
   Table,
   TableBody,
@@ -27,6 +31,7 @@ import {
 
 import type { ChangePlanDecisionResponse } from "@/app/api/chat/change-plans/[planId]/route"
 import { OPERATION_LABELS, type ChangePlanView } from "@/lib/sap/agent-types"
+import { describeODataPath } from "@/lib/sap/business"
 import { fetchWithSapSignIn, SapAuthCancelledError } from "@/lib/sap-fetch"
 
 const STATUS: Record<ChangePlanView["status"], { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -40,8 +45,9 @@ const STATUS: Record<ChangePlanView["status"], { label: string; variant: "defaul
 
 /**
  * Human-in-the-loop confirmation for a write the model proposed. Shows the
- * target system, the exact request and every field's current and new value.
- * Nothing reaches SAP unless the user presses Approve.
+ * record in business words, the target system and every field's current and
+ * new value; the exact request is under "Technical details". Nothing reaches
+ * SAP unless the user presses Approve.
  */
 export function ChangePlanCard({
   plan,
@@ -51,9 +57,11 @@ export function ChangePlanCard({
   onUpdated: (plan: ChangePlanView, note: { id: string; content: string } | null) => void
 }) {
   const [busy, setBusy] = React.useState<"approve" | "reject" | null>(null)
+  const [technicalOpen, setTechnicalOpen] = React.useState(false)
   const production = plan.environment === "PRD"
   const pending = plan.status === "PENDING"
   const status = STATUS[plan.status]
+  const title = `${OPERATION_LABELS[plan.operation]} ${describeODataPath(plan.path)}`
 
   async function decide(decision: "approve" | "reject") {
     setBusy(decision)
@@ -81,11 +89,9 @@ export function ChangePlanCard({
   }
 
   return (
-    <Card className="gap-4 py-4" aria-label={`Change plan: ${OPERATION_LABELS[plan.operation]} ${plan.path}`}>
+    <Card className="gap-4 py-4" aria-label={`Change for your approval: ${title}`}>
       <CardHeader className="px-4">
-        <CardTitle className="text-sm">
-          Change plan · {OPERATION_LABELS[plan.operation]} <code className="font-mono text-xs">{plan.entitySet}</code>
-        </CardTitle>
+        <CardTitle className="text-sm">{title}</CardTitle>
         <CardDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
           <span>{plan.systemName}</span>
           <span aria-hidden="true">·</span>
@@ -102,14 +108,13 @@ export function ChangePlanCard({
           <Alert variant="destructive">
             <TriangleAlertIcon aria-hidden="true" />
             <AlertTitle>Production system</AlertTitle>
-            <AlertDescription>This writes directly to production data. The API has no test mode; prove new changes in DEV or QAS first.</AlertDescription>
+            <AlertDescription>
+              Approving changes live business data. There is no test run; try new kinds of changes in a test system first.
+            </AlertDescription>
           </Alert>
         ) : null}
 
         <p className="text-sm">{plan.reason}</p>
-        <p className="font-mono text-xs break-all text-muted-foreground">
-          {plan.method} {plan.path}
-        </p>
 
         <div className="overflow-hidden rounded-lg border">
           <Table>
@@ -149,10 +154,24 @@ export function ChangePlanCard({
           </p>
         ) : pending ? (
           <p className="text-xs text-muted-foreground">
-            Uses the ETag read just now; if someone changes the record in the meantime, SAP refuses the change. Expires at{" "}
-            {new Date(plan.expiresAt).toLocaleTimeString()}.
+            Based on the values read just now: if someone else changes this record before you approve, SAP refuses the change and
+            nothing is overwritten. Valid until {new Date(plan.expiresAt).toLocaleTimeString()}.
           </p>
         ) : null}
+
+        <Collapsible open={technicalOpen} onOpenChange={setTechnicalOpen}>
+          <CollapsibleTrigger asChild>
+            <Button type="button" variant="ghost" size="sm" className="h-auto px-0 py-0 text-xs text-muted-foreground hover:bg-transparent">
+              Technical details
+              <ChevronDownIcon className={cn("transition-transform", technicalOpen && "rotate-180")} aria-hidden="true" />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <p className="pt-1 font-mono text-xs break-all text-muted-foreground">
+              {plan.method} {plan.path}
+            </p>
+          </CollapsibleContent>
+        </Collapsible>
       </CardContent>
 
       {pending ? (

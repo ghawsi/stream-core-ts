@@ -39,6 +39,7 @@ import {
 } from "@boilerplate/ui"
 
 import { deleteSapSystem, disconnectAllSapSystems, disconnectSapSystem } from "@/app/actions/sap-systems"
+import { businessAreaFor } from "@/lib/sap/business"
 import { SapAuthCancelledError, sapFetchJson } from "@/lib/sap-fetch"
 import { SapSystemForm } from "./sap-system-form"
 
@@ -186,6 +187,7 @@ export function SapSystemsView({ systems }: { systems: SapSystemRow[] }) {
                       <TableCell className="max-w-64 whitespace-normal">
                         <div className="font-medium">{system.name}</div>
                         {system.description ? <div className="text-xs text-muted-foreground">{system.description}</div> : null}
+                        <div className="text-xs">{businessAreaFor(system.servicePath).title}</div>
                         <div className="truncate font-mono text-xs text-muted-foreground" title={system.servicePath}>
                           {system.servicePath}
                         </div>

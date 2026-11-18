@@ -30,19 +30,23 @@ const SignIn = () => {
       setError(error.message ?? "Sign-in failed. Check your email and password.")
       return
     }
-    // Back to the page that asked for sign-in (?next=/path). Same-site paths only.
+    // To the home page, or back to the protected page that asked for sign-in
+    // (?next=/path). Same-site paths only.
     const next = new URLSearchParams(window.location.search).get("next")
-    if (next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\")) router.replace(next)
+    const safeNext = next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : null
+    router.replace(safeNext ?? "/")
+    router.refresh()
   }
 
   async function handleSignOut() {
     setBusy(true)
     await authClient.signOut()
     setBusy(false)
+    router.refresh()
   }
 
   return (
-    <main className="flex min-h-svh items-center justify-center p-4">
+    <main className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-4">
       <Card className="w-full max-w-sm">
         {isPending ? (
           <CardContent className="flex justify-center py-8">
@@ -58,7 +62,10 @@ const SignIn = () => {
                 You are signed in as {session.user.name} ({session.user.email}).
               </CardDescription>
             </CardHeader>
-            <CardFooter>
+            <CardFooter className="grid gap-3">
+              <Button asChild className="w-full">
+                <Link href="/">Continue</Link>
+              </Button>
               <Button variant="outline" className="w-full" onClick={handleSignOut} disabled={busy}>
                 {busy ? "Signing out" : "Sign out"}
               </Button>

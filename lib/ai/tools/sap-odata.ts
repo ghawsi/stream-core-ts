@@ -1,7 +1,8 @@
 import { z } from "zod"
 
 import { prisma } from "@/lib/db"
-import type { ChangePlanDiff, ChangePlanView } from "@/lib/sap/agent-types"
+import { OPERATION_LABELS, type ChangePlanDiff, type ChangePlanView } from "@/lib/sap/agent-types"
+import { describeODataPath, humanizeName } from "@/lib/sap/business"
 import { SapSessionExpiredError, SapTransportError, type SapClient, type SapResponse } from "@/lib/sap/client"
 import {
   buildKeyPredicate,
@@ -18,7 +19,7 @@ import {
 } from "@/lib/sap/metadata"
 
 /**
- * SAP OData V4 tools for the product master agent. Reads run directly;
+ * SAP OData V4 tools for the business data agent. Reads run directly;
  * writes only create a Change Plan that the user approves in the chat
  * (app/api/chat/change-plans/[planId]). Every request goes through SapClient,
  * so it uses the user's own SAP session and is audit-logged.
@@ -143,10 +144,10 @@ export const SAP_TOOL_DEFINITIONS = [
     description: [
       "Prepares a write (create, update, flag for deletion, delete) as a Change Plan. It reads the current values and ETag live from SAP, drops unchanged fields, and shows the plan to the user with Approve and Reject buttons. NOTHING is written to SAP by this tool; only the user's click executes the plan.",
       "- UPDATE: keys + changes with only the properties to change (never keys, computed or administrative fields).",
-      "- FLAG_DELETION: logical, reversible deletion of a product or organisational data; keys (+ changes with the deletion-flag property set to true if you know its name). Products cannot be physically deleted through this API.",
+      "- FLAG_DELETION: logical, reversible deletion of a record (for example a product or its plant data); keys (+ changes with the deletion-flag property set to true if you know its name).",
       "- DELETE: physical deletion of list-type dependent records only (for example an additional-language description), where $metadata allows it.",
-      "- CREATE: changes holds the new record. For a new dependent record pass parent {entitySet, keys, navigation}, e.g. navigation \"_ProductPlant\". A new product needs Product, the product type, the base unit and _ProductDescription with at least one entry (at most 40 characters).",
-      "After calling it, tell the user the plan is waiting for their approval in the card. Never say the change was made.",
+      "- CREATE: changes holds the new record. For a new dependent record pass parent {entitySet, keys, navigation}, e.g. navigation \"_ProductPlant\" or \"_Item\". Check the required fields with sap_describe_entity first.",
+      "After calling it, tell the user in business terms what will change and that it is waiting for their approval in the card. Never say the change was made.",
     ].join("\n"),
     parameters: {
       type: "object",
@@ -185,7 +186,16 @@ const stringList = z.preprocess(
   (value) => (typeof value === "string" ? value.split(",").map((item) => item.trim()).filter(Boolean) : value),
   z.array(z.string().trim().min(1)).min(1)
 )
-const keyValues = z.union([z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])), z.string()])
+/** JSON text for objects, as models with a reduced schema (Gemini) send it. */
+const parseJsonText = (value: unknown) => {
+  if (typeof value !== "string" || !value.trim().startsWith("{")) return value
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    return value
+  }
+}
+const keyValues = z.preprocess(parseJsonText, z.union([z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])), z.string()]))
 const optionalText = z.preprocess((value) => (value === null || value === "" ? undefined : value), z.string().trim().optional())
 const optionalInt = (max?: number) =>
   z.preprocess(
@@ -215,7 +225,7 @@ const schemas = {
     operation: z.enum(["UPDATE", "CREATE", "FLAG_DELETION", "DELETE"]),
     entitySet: z.string().trim().min(1),
     keys: keyValues.optional(),
-    changes: z.record(z.string(), z.unknown()).optional(),
+    changes: z.preprocess(parseJsonText, z.record(z.string(), z.unknown()).optional()),
     parent: z.object({ entitySet: z.string().trim().min(1), keys: keyValues, navigation: z.string().trim().min(1) }).optional(),
     reason: z.string().trim().min(1).max(500),
   }),
@@ -232,12 +242,27 @@ function errorResult(message: string, summary = message): SapToolResult {
   return { content: output({ error: message }), isError: true, summary }
 }
 
+/** One line for the chat, in business words. */
+const STATUS_SUMMARY: Record<number, string> = {
+  400: "SAP refused the request",
+  401: "Not signed in to SAP",
+  403: "No authorization",
+  404: "Not found",
+  405: "Not supported by this API",
+  409: "Conflict with existing data",
+  412: "Changed by someone else",
+  429: "SAP is busy",
+  500: "SAP error",
+  501: "Not supported by this API",
+  503: "SAP is busy or unavailable",
+}
+
 /** SAP's error body, verbatim, so the model can correct the request (400) or explain it (403…). */
 function sapErrorResult(response: SapResponse, hint?: string): SapToolResult {
   const error = response.error
   const meaning: Record<number, string> = {
     400: "Bad request: wrong property, value format or syntax, or a business validation error. Correct the request only if the fix is certain.",
-    403: "Missing SAP authorization (for example S_START for API_PRODUCT or M_MATE_* objects). Report the SAP message; do not retry.",
+    403: "Missing SAP authorization for this API or for the organizational unit (for example plant, company code or sales organization). Explain SAP's message in business terms; do not retry.",
     404: "Not found.",
     405: "Operation not supported by this API. Do not retry.",
     409: "Conflict, e.g. the record already exists.",
@@ -256,8 +281,28 @@ function sapErrorResult(response: SapResponse, hint?: string): SapToolResult {
       hint,
     }),
     isError: true,
-    summary: `HTTP ${response.status}${error?.message ? `: ${error.message}` : ""}`,
+    summary: `${STATUS_SUMMARY[response.status] ?? `SAP error ${response.status}`}${error?.message ? `: ${error.message}` : ""}`,
   }
+}
+
+/**
+ * Business labels for the fields in the records ("ProductType" → "Product
+ * Type"), from the metadata labels, so that answers use business headings.
+ */
+function fieldLabels(type: EntityTypeInfo, records: unknown[]): Record<string, string> | undefined {
+  const names = new Set<string>()
+  for (const record of records) {
+    if (!record || typeof record !== "object") continue
+    for (const [name, value] of Object.entries(record)) {
+      if (!name.startsWith("@") && value !== null && value !== "") names.add(name)
+    }
+  }
+  const labels: Record<string, string> = {}
+  for (const name of names) {
+    const label = type.properties.find((property) => property.name === name)?.label ?? humanizeName(name)
+    if (label && label !== name) labels[name] = label
+  }
+  return Object.keys(labels).length ? labels : undefined
 }
 
 function cleanRecord(record: unknown): unknown {
@@ -423,7 +468,7 @@ async function listEntities(args: z.infer<(typeof schemas)["sap_list_entities"]>
   return {
     content: output({ system: ctx.system.name, entitySets: sets, total: catalog.entitySets.length }),
     isError: false,
-    summary: `${sets.length} entity set${sets.length === 1 ? "" : "s"}`,
+    summary: `${sets.length} kind${sets.length === 1 ? "" : "s"} of business data`,
   }
 }
 
@@ -471,7 +516,7 @@ async function describeEntity(args: z.infer<(typeof schemas)["sap_describe_entit
       ...(deletionFlags.length ? { deletionFlagProperties: deletionFlags } : {}),
     }),
     isError: false,
-    summary: `${properties.length} propert${properties.length === 1 ? "y" : "ies"} of ${set.name}`,
+    summary: `${properties.length} field${properties.length === 1 ? "" : "s"} of ${humanizeName(set.name)}`,
   }
 }
 
@@ -506,7 +551,11 @@ async function queryOData(args: z.infer<(typeof schemas)["sap_query_odata"]>, ct
 
   const data = response.data as { value?: unknown[]; "@odata.count"?: number | string; "@odata.nextLink"?: string } | null
   if (!resolved.collection || !Array.isArray(data?.value)) {
-    return { content: output({ record: cleanRecord(data), etag: response.etag }), isError: false, summary: "1 record" }
+    return {
+      content: output({ fieldLabels: fieldLabels(resolved.type, [data]), record: cleanRecord(data), etag: response.etag }),
+      isError: false,
+      summary: "1 record",
+    }
   }
   const total = data["@odata.count"] === undefined ? undefined : Number(data["@odata.count"])
   const returned = data.value.length
@@ -519,6 +568,7 @@ async function queryOData(args: z.infer<(typeof schemas)["sap_query_odata"]>, ct
       ...(more ? { moreAvailable: true, nextSkip: skip + returned } : {}),
       ...(returned === 0 ? { note: "No records match. Report that no data was found; do not invent records." } : {}),
       ...(response.sapMessages.length ? { sapMessages: response.sapMessages } : {}),
+      fieldLabels: fieldLabels(resolved.type, data.value),
       records: cleanRecord(data.value),
     }),
     isError: false,
@@ -571,6 +621,7 @@ async function getEntityByKey(args: z.infer<(typeof schemas)["sap_get_entity_by_
       found: true,
       etag: response.etag,
       ...(response.sapMessages.length ? { sapMessages: response.sapMessages } : {}),
+      fieldLabels: fieldLabels(type, [response.data]),
       record: cleanRecord(response.data),
     }),
     isError: false,
@@ -778,26 +829,29 @@ async function proposeChange(args: z.infer<(typeof schemas)["sap_propose_change"
       note: "Nothing has been sent to SAP. The user approves or rejects this Change Plan with the buttons shown in the app. Tell them it is waiting for their approval; do not claim the change was made and do not ask them to type APPROVE.",
     }),
     isError: false,
-    summary: `Change plan waiting for approval (${diff.length} field${diff.length === 1 ? "" : "s"})`,
+    summary: `Waiting for your approval (${diff.length} field${diff.length === 1 ? "" : "s"})`,
   }
 }
 
 // ---------- dispatch ----------
 
 export function toolLabel(name: string, args: Record<string, unknown>): string {
-  const keys = (value: unknown) =>
-    value && typeof value === "object" ? Object.values(value as Record<string, unknown>).map(String).join(", ") : value ? String(value) : ""
+  const keys = (raw: unknown) => {
+    const value = parseJsonText(raw)
+    return value && typeof value === "object" ? Object.values(value as Record<string, unknown>).map(String).join(", ") : value ? String(value) : ""
+  }
+  const operation = OPERATION_LABELS[String(args.operation) as keyof typeof OPERATION_LABELS] ?? "Change"
   switch (name) {
     case "sap_list_entities":
-      return "Reading the SAP service catalog"
+      return "Checking which business data is available"
     case "sap_describe_entity":
-      return `Reading the fields of ${String(args.entitySet ?? "an entity set")}`
+      return `Looking up the fields of ${humanizeName(String(args.entitySet ?? "the data"))}`
     case "sap_query_odata":
-      return `Querying SAP S/4HANA: ${String(args.path ?? "")}`
+      return `Looking up ${describeODataPath(String(args.path ?? "data"))}`
     case "sap_get_entity_by_key":
-      return `Reading ${String(args.entitySet ?? "")} ${keys(args.keys)}`.trim()
+      return `Reading ${humanizeName(String(args.entitySet ?? ""))} ${keys(args.keys)}`.trim()
     case "sap_propose_change":
-      return `Preparing a change plan: ${String(args.operation ?? "")} ${String(args.entitySet ?? "")} ${keys(args.keys)}`.trim()
+      return `Preparing a change for your approval: ${operation} ${humanizeName(String(args.entitySet ?? ""))} ${keys(args.keys)}`.trim()
     default:
       return name
   }

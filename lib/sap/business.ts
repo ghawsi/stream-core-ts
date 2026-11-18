@@ -138,6 +138,9 @@ const AREAS: readonly AreaDefinition[] = [
       "Search products by number with conditions on Product (startswith, contains), by name with conditions on ProductDescription in ProductDescription.",
       "Not in this API: long texts (basic data, sales, purchase order, inspection texts), classification and characteristics, retail articles.",
       "The product type cannot be changed through this API; SAP offers the Fiori app Change Material Type for that.",
+      "Weights, volumes, dimensions and periods are quantities with a unit field and an ISO unit field (gross and net weight share the unit of weight); prices have a currency. SAP needs each group complete and consistent in one change: name only what the user wants changed, the change tool adds the rest and converts units such as kg, gram or piece to SAP's codes. If the unit changes, the numbers measured in it are not converted: say so.",
+      "The net weight cannot be higher than the gross weight.",
+      "Status, group and category codes (for example the cross-plant status) must exist in SAP customizing. When the change tool warns that no product uses a value yet, ask the user to confirm it before they approve.",
       "A new product needs its product number (no internal numbering here), product type, base unit, usually the industry sector, and at least one description of at most 40 characters.",
       "Products and most of their organizational data cannot be deleted physically through this API: propose the deletion flag (IsMarkedForDeletion), explain that it is reversible and that physical removal only happens by archiving in SAP. Descriptions can be deleted, but never the last one.",
       "Authorization problems usually concern product master authorizations by product type, plant or sales organization.",
@@ -211,7 +214,8 @@ export function describeODataPath(path: string): string {
             value.startsWith("'") ? value.slice(1, -1).replace(/''/g, "'") : value.trim()
           )
         : []
-      return [humanizeName(name), values.join(", ")].filter(Boolean).join(" ")
+      // Empty key parts (e.g. ValuationType='') add nothing readable.
+      return [humanizeName(name), values.filter(Boolean).join(", ")].filter(Boolean).join(" ")
     })
     .join(" › ")
 }

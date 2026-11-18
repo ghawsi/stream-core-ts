@@ -23,7 +23,16 @@ export type ToolRun = {
   summary?: string
 }
 
-export type ChangePlanDiff = { field: string; label?: string; current: string; next: string }
+export type ChangePlanDiff = {
+  field: string
+  label?: string
+  current: string
+  next: string
+  /** Not changed, but sent because SAP needs it together with a changed field (unit, ISO unit, currency). */
+  sentAlong?: boolean
+  /** Why it is sent along. */
+  note?: string
+}
 
 export type ChangePlanStatus = "PENDING" | "EXECUTING" | "REJECTED" | "EXECUTED" | "FAILED" | "EXPIRED"
 
@@ -35,6 +44,8 @@ export type ChangePlanView = {
   path: string
   reason: string
   diff: ChangePlanDiff[]
+  /** Checks that did not block the plan but the approver should see. */
+  warnings: string[]
   systemName: string
   sapClient: string
   environment: string

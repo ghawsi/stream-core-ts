@@ -24,6 +24,34 @@ const REFUSAL: Record<number, string> = {
   501: "This API does not support this change",
 }
 
+/**
+ * The fields an SAP error is about, found by the values it quotes: SAP names
+ * its own table fields ("The value ZA is not allowed for the field
+ * MARA-MSTAE"), the plan knows which field carried "ZA".
+ */
+function refusedFields(payloadJson: string | null, diffJson: string, message: string): string[] {
+  let payload: Record<string, unknown> = {}
+  try {
+    payload = payloadJson ? (JSON.parse(payloadJson) as Record<string, unknown>) : {}
+  } catch {
+    return []
+  }
+  let labels: Record<string, string> = {}
+  try {
+    const stored = JSON.parse(diffJson) as { field: string; label?: string }[] | { rows?: { field: string; label?: string }[] }
+    const rows = Array.isArray(stored) ? stored : (stored.rows ?? [])
+    labels = Object.fromEntries(rows.filter((row) => row.label).map((row) => [row.field, row.label as string]))
+  } catch {
+    // labels stay technical
+  }
+  return Object.entries(payload)
+    .filter(([, value]) => {
+      const text = typeof value === "string" || typeof value === "number" ? String(value) : ""
+      return text.length >= 1 && new RegExp(`(^|[\\s'"(])${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([\\s'".,)]|$)`).test(message)
+    })
+    .map(([field, value]) => `${labels[field] ?? humanizeName(field)} = ${String(value)}`)
+}
+
 /** "2026-11-18 09:45 UTC": the note is stored once and read in any time zone. */
 const noteTime = (date: Date) => `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`
 
@@ -127,10 +155,12 @@ export async function POST(request: Request, context: Context) {
     } else {
       const error = response.error
       const details = error?.details.map((detail) => detail.message).filter(Boolean) ?? []
+      const refused = refusedFields(plan.payload, plan.diff, [error?.message ?? "", ...details].join(" "))
       // SAP's message number helps the support team; the HTTP status stays in resultStatus.
       resultMessage = [
         `${REFUSAL[response.status] ?? "SAP did not accept the change"}: ${error?.message ? `"${error.message}"` : "no details"}${error?.code ? ` (SAP message ${error.code})` : ""}`,
         ...details,
+        ...(refused.length ? [`This concerns ${refused.join(", ")}.`] : []),
       ].join(" · ")
     }
   } catch (error) {
@@ -158,12 +188,14 @@ export async function POST(request: Request, context: Context) {
 
   const view = toChangePlanView(updated)
   const changes = view.diff
-    .filter((item) => item.field !== "(record)")
+    .filter((item) => item.field !== "(record)" && !item.sentAlong)
     .map((item) => `- ${item.label ?? humanizeName(item.field)}: ${item.current} → **${item.next}**`)
     .join("\n")
+  const sentAlong = view.diff.filter((item) => item.sentAlong).map((item) => item.label ?? humanizeName(item.field))
+  const along = sentAlong.length ? `Sent along unchanged, as SAP requires: ${sentAlong.join(", ")}.\n\n` : ""
   const note = await addNote(
     status === "EXECUTED"
-      ? `**Change applied.** ${target}\n\n${changes ? `${changes}\n\n` : ""}${resultMessage}\n\nApproved by ${authSession.user.name} at ${noteTime(decidedAt)}. SAP records the change under your SAP user.`
+      ? `**Change applied.** ${target}\n\n${changes ? `${changes}\n\n` : ""}${along}${resultMessage}\n\nApproved by ${authSession.user.name} at ${noteTime(decidedAt)}. SAP records the change under your SAP user.`
       : `**Change not applied.** ${target}\n\n${resultMessage}\n\nApproved by ${authSession.user.name} at ${noteTime(decidedAt)}.`
   )
   return json({ ok: true, plan: view, note })

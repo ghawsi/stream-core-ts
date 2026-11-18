@@ -67,6 +67,17 @@ type RequestOptions = {
   accept?: string
   /** Tool name for the audit log. */
   toolName: string
+  /**
+   * Another OData V4 service on the same host and session, for reads only:
+   * SAP's code lists for units and currencies that the service's $metadata
+   * points to (e.g. /sap/opu/odata4/sap/api_product/default/iwbep/common/0001).
+   */
+  serviceRoot?: string
+}
+
+/** A service root on the same host that a read may use: below /sap/opu/odata4/, without "..". */
+export function isAllowedServiceRoot(path: string) {
+  return /^\/sap\/opu\/odata4\/[\w/.~-]+$/.test(path) && !path.split("/").includes("..")
 }
 
 function encodeQueryValue(value: string) {
@@ -198,8 +209,8 @@ export class SapClient {
     }
   }
 
-  private async raw(method: string, relativePath: string, headers: Headers, body: string | undefined, toolName: string) {
-    const url = `${this.root()}${relativePath}`
+  private async raw(method: string, relativePath: string, headers: Headers, body: string | undefined, toolName: string, serviceRoot?: string) {
+    const url = `${serviceRoot ? `${this.system.baseUrl.replace(/\/+$/, "")}${normaliseServicePath(serviceRoot)}/` : this.root()}${relativePath}`
     const started = performance.now()
     const signal = this.signal ? AbortSignal.any([this.signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS)
     // Checked before every request: credentials and data never go to a production system unencrypted.
@@ -248,8 +259,12 @@ export class SapClient {
 
   async request(options: RequestOptions): Promise<SapResponse> {
     const query = buildQueryString(options.query, this.system.sapClient)
-    const path = `${options.path}?${query}`
     const writing = options.method !== "GET"
+    if (options.serviceRoot && (writing || !isAllowedServiceRoot(options.serviceRoot))) {
+      throw new SapTransportError(`Only reads below /sap/opu/odata4/ may use another service root (${options.serviceRoot}).`)
+    }
+    // The audit log shows which service a code-list read went to.
+    const path = `${options.serviceRoot ? `[${options.serviceRoot}] ` : ""}${options.path}?${query}`
     const body = options.body === undefined ? undefined : JSON.stringify(options.body)
 
     const send = async () => {
@@ -257,7 +272,7 @@ export class SapClient {
       if (body !== undefined) headers["content-type"] = SAP_JSON
       if (options.ifMatch) headers["if-match"] = options.ifMatch
       if (writing) headers["x-csrf-token"] = this.csrfToken ?? (await this.fetchCsrfToken())
-      return this.raw(options.method, path, this.headers(headers), body, options.toolName)
+      return this.raw(options.method, `${options.path}?${query}`, this.headers(headers), body, options.toolName, options.serviceRoot)
     }
 
     let { response, text, durationMs } = await send()

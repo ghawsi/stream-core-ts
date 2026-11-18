@@ -3,7 +3,10 @@ import { z } from "zod"
 import { prisma } from "@/lib/db"
 import { OPERATION_LABELS, type ChangePlanDiff, type ChangePlanView } from "@/lib/sap/agent-types"
 import { businessAreaFor, describeODataPath, humanizeName } from "@/lib/sap/business"
+import { ChangeInputError, completeChange, dependencyGroups, isCustomizingCode, prepareChange, type CodeResolver } from "@/lib/sap/change-builder"
+import { serializePlanDiff } from "@/lib/sap/change-plans"
 import { SapSessionExpiredError, SapTransportError, type SapClient, type SapResponse } from "@/lib/sap/client"
+import { findCode, loadCodeList } from "@/lib/sap/code-lists"
 import {
   buildKeyPredicate,
   isStringEncodedNumber,
@@ -211,6 +214,7 @@ export const SAP_TOOL_DEFINITIONS = [
       "- FLAG_DELETION: logical, reversible deletion of a record (for example a product or its plant data); keys only, or changes with the deletion-flag field set to true.",
       "- DELETE: physical deletion of dependent list records only (for example an additional-language description), where the API allows it.",
       '- CREATE: changes holds the new record. For a new dependent record pass parent {"entitySet","keys","navigation"}, e.g. navigation "_ProductPlant". Check the required fields with sap_describe_entity first.',
+      "- Units, ISO units and currencies: pass them as the user says them (kg, gram, piece, KGM, EUR). The tool converts them to SAP's codes through the system's code lists and adds the dependent fields SAP requires in the same request (the unit and ISO unit of a quantity, other quantities measured in that unit, the currency of an amount) with their current values. Name only what the user wants to change. Read its warnings and errors: they say which value does not fit and why.",
       "After calling it, tell the user in business terms what will change and that it is waiting for their approval in the card. Never say the change was made.",
     ].join("\n"),
     parameters: {
@@ -587,15 +591,6 @@ function display(value: unknown): string {
   return String(value)
 }
 
-/** Equal for the purpose of a change: "12.500" equals "12.5" for decimals; empty equals null. */
-function sameValue(before: unknown, next: unknown) {
-  if (display(before) === display(next)) return true
-  const numeric = (value: unknown) => (typeof value === "number" || (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) ? Number(value) : null)
-  const a = numeric(before)
-  const b = numeric(next)
-  return a !== null && b !== null && a === b
-}
-
 const ADMIN_FIELD = /^(CreatedBy|CreationDate|CreationTime|CreationDateTime|CreatedByUser|LastChangedBy|LastChangeDate|LastChangeTime|LastChangeDateTime|LastChangedByUser|LastChangedDateTime)$/i
 const DELETION_FLAG = /(MarkedForDeletion|DeletionIndicator|DeletionFlag|IsDeleted)/i
 
@@ -616,6 +611,17 @@ function convertValue(property: PropertyInfo, value: unknown): unknown {
   if (isStringEncodedNumber(type)) {
     const number = toNumberText(value)
     if (number === undefined) throw new Error(`${property.name} needs a number; got "${String(value)}".`)
+    // Precision and scale from $metadata, e.g. Precision="13" Scale="3": at most 10 digits before and 3 after the point.
+    if (type === "Edm.Decimal" && property.precision !== undefined && property.scale !== undefined) {
+      const [whole, fraction = ""] = number.replace(/^-/, "").split(".")
+      const decimals = fraction.replace(/0+$/, "").length
+      if (decimals > property.scale) {
+        throw new Error(`${property.label ?? property.name} allows ${property.scale === 0 ? "no decimals" : `at most ${property.scale} decimals`}; got ${number}.`)
+      }
+      if (whole.replace(/^0+/, "").length > property.precision - property.scale) {
+        throw new Error(`${property.label ?? property.name} allows at most ${property.precision - property.scale} digits before the decimal point; got ${number}.`)
+      }
+    }
     return number
   }
   if (/^Edm\.(Int16|Int32|Byte|SByte|Double|Single)$/.test(type)) {
@@ -734,7 +740,13 @@ async function describeEntity(args: z.infer<(typeof schemas)["sap_describe_entit
       ...(type.keys.includes(property.name) ? { key: true } : {}),
       ...(property.computed ? { calculatedBySap: true } : {}),
       ...(property.immutable ? { immutable: true } : {}),
+      ...(property.unitProperty ? { unit: property.unitProperty } : {}),
+      ...(property.currencyProperty ? { currency: property.currencyProperty } : {}),
+      ...(property.type === "Edm.Decimal" ? { decimals: property.variableScale ? "per currency or unit" : (property.scale ?? 0) } : {}),
     }))
+  const dependencies = dependencyGroups(type)
+    .filter((group) => group.members.length > 0)
+    .map((group) => [...group.members, group.code, ...(group.iso ? [group.iso] : [])])
   const deletionFlags = type.properties.filter((property) => DELETION_FLAG.test(property.name)).map((property) => property.name)
   const readOnly = businessAreaFor(ctx.system.servicePath).readOnlyFields?.filter((rule) => rule.entitySet === set.name)
 
@@ -756,6 +768,13 @@ async function describeEntity(args: z.infer<(typeof schemas)["sap_describe_entit
       })),
       ...(deletionFlags.length ? { deletionFlagFields: deletionFlags } : {}),
       ...(readOnly?.length ? { notChangeable: readOnly.map((rule) => ({ field: rule.field, reason: rule.reason })) } : {}),
+      ...(dependencies.length
+        ? {
+            changedTogether: dependencies,
+            changedTogetherNote:
+              "Each list is one quantity or amount group: SAP needs the whole group in a change. Name only what the user wants to change; sap_propose_change adds the rest with current values and converts units and currencies.",
+          }
+        : {}),
     }),
     isError: false,
     summary: `${properties.length} field${properties.length === 1 ? "" : "s"} of ${humanizeName(set.name)}`,
@@ -908,6 +927,62 @@ async function getEntityByKey(args: z.infer<(typeof schemas)["sap_get_entity_by_
   }
 }
 
+/**
+ * Unit and currency lookups through SAP's code lists, loaded only when the
+ * change touches a unit, ISO unit, currency, quantity or amount.
+ */
+async function codeResolver(ctx: SapToolContext, catalog: ServiceCatalog, type: EntityTypeInfo, names: string[]): Promise<CodeResolver> {
+  const groups = dependencyGroups(type)
+  const touches = (kind: "unit" | "currency") =>
+    names.some((name) => {
+      const property = type.properties.find((item) => item.name === name)
+      if (kind === "unit" ? property?.isUnit : property?.isCurrency) return true
+      return groups.some((group) => group.kind === kind && (group.code === name || group.iso === name || group.members.includes(name)))
+    })
+  const [units, currencies] = await Promise.all([
+    touches("unit") ? loadCodeList(ctx.client, catalog, "units") : null,
+    touches("currency") ? loadCodeList(ctx.client, catalog, "currencies") : null,
+  ])
+  return {
+    unit: units ? (input) => findCode(units, input) : null,
+    currency: currencies ? (input) => findCode(currencies, input) : null,
+  }
+}
+
+/** Values of a code field used in the system ($apply=groupby), or null when SAP cannot tell. */
+async function valuesInUse(ctx: SapToolContext, setName: string, field: string): Promise<string[] | null> {
+  try {
+    const response = await ctx.client.request({
+      method: "GET",
+      path: setName,
+      query: { $apply: `groupby((${field}))`, $top: "200" },
+      toolName: "sap_propose_change",
+    })
+    const rows = (response.data as { value?: Record<string, unknown>[] } | null)?.value
+    return response.ok && Array.isArray(rows) ? rows.map((row) => String(row[field] ?? "")).filter(Boolean) : null
+  } catch (error) {
+    if (error instanceof SapSessionExpiredError) throw error
+    return null
+  }
+}
+
+/** Warnings for customizing codes (status, group, category) that no record uses yet: SAP refuses unknown ones (MG/142). */
+async function customizingWarnings(ctx: SapToolContext, setName: string, type: EntityTypeInfo, rows: ChangePlanDiff[], payload: Record<string, unknown>) {
+  const warnings: string[] = []
+  for (const row of rows) {
+    if (row.sentAlong) continue
+    const property = type.properties.find((item) => item.name === row.field)
+    const value = String(payload[row.field] ?? "")
+    if (!property || !value || !isCustomizingCode(type, property)) continue
+    const used = await valuesInUse(ctx, setName, property.name)
+    if (!used || used.length >= 200 || used.includes(value)) continue
+    warnings.push(
+      `No ${setName} record in ${ctx.system.name} uses ${property.label ?? property.name} "${value}" yet${used.length ? ` (values in use: ${used.slice(0, 15).join(", ")})` : ""}. SAP refuses values that are not set up in customizing (message MG/142): confirm the value with the user.`
+    )
+  }
+  return warnings
+}
+
 /** A change field: exact name or label only (writes never guess), and never one the API keeps read-only. */
 function changeProperty(type: EntityTypeInfo, setName: string, name: string, ctx: SapToolContext): PropertyInfo {
   const property = resolveProperty(type, name, { fuzzy: false })
@@ -940,7 +1015,9 @@ async function proposeChange(args: z.infer<(typeof schemas)["sap_propose_change"
   let etag: string | null = null
   let payload: Record<string, unknown> | null = null
   let diff: ChangePlanDiff[] = []
-  const label = (name: string) => type.properties.find((property) => property.name === name)?.label
+  let warnings: string[] = []
+  let conversions: string[] = []
+  const propertyOf = (name: string) => type.properties.find((property) => property.name === name)!
   const rawChanges = args.changes === undefined ? undefined : parseObject(args.changes)
   if (args.changes !== undefined && !rawChanges) return errorResult("changes must be an object of field names and values, e.g. {\"GrossWeight\":\"12.5\"}.")
 
@@ -972,21 +1049,28 @@ async function proposeChange(args: z.infer<(typeof schemas)["sap_propose_change"
       }
       if (Object.keys(changes).length === 0) return errorResult("changes is empty: name the fields to change and their new values.")
 
-      const converted: Record<string, unknown> = {}
+      const requested: Record<string, unknown> = {}
       for (const [name, value] of Object.entries(changes)) {
         const property = changeProperty(type, set.name, name, ctx)
         if (type.keys.includes(property.name)) return errorResult(`${property.name} is a key and cannot be changed.`)
         if (property.computed || property.immutable || ADMIN_FIELD.test(property.name)) {
           return errorResult(`${property.name} is maintained by SAP (calculated, immutable or administrative) and cannot be changed.`)
         }
-        converted[property.name] = convertValue(property, value)
+        requested[property.name] = value
       }
 
-      // U1: read immediately before writing, capture the ETag.
+      // Units, ISO units and currencies through SAP's code lists; dependent fields of the same group.
+      const resolver = await codeResolver(ctx, catalog, type, Object.keys(requested))
+      const prepared = prepareChange(type, requested, resolver)
+      conversions = prepared.notes
+      const converted: Record<string, unknown> = {}
+      for (const [name, value] of Object.entries(prepared.values)) converted[name] = convertValue(propertyOf(name), value)
+
+      // U1: read immediately before writing (changed and dependent fields), capture the ETag.
       const current = await ctx.client.request({
         method: "GET",
         path,
-        query: { $select: [...type.keys, ...Object.keys(converted)].join(",") },
+        query: { $select: [...new Set([...type.keys, ...Object.keys(converted), ...prepared.dependents])].join(",") },
         toolName: "sap_propose_change",
       })
       if (current.status === 404) return errorResult(`${describeODataPath(path)} does not exist in ${ctx.system.name}.`, "Record not found")
@@ -995,21 +1079,18 @@ async function proposeChange(args: z.infer<(typeof schemas)["sap_propose_change"
       etag = current.etag
       const record = (current.data ?? {}) as Record<string, unknown>
 
-      // U2: keep only real changes.
-      payload = {}
-      for (const [name, next] of Object.entries(converted)) {
-        const before = record[name]
-        if (sameValue(before, next)) continue
-        payload[name] = next
-        diff.push({ field: name, label: label(name), current: display(before), next: display(next) })
-      }
-      if (diff.length === 0) {
+      // U2: only real changes, plus every field SAP needs with them; checks before anything is sent.
+      const completed = completeChange(type, prepared, converted, record, resolver)
+      if (completed.rows.length === 0) {
         return {
           content: output({ status: "NO_CHANGE_REQUIRED", message: "The record already has these values. Nothing needs to be sent.", current: cleanRecord(record) }),
           isError: false,
           summary: "No change required",
         }
       }
+      payload = completed.payload
+      diff = completed.rows
+      warnings = [...completed.warnings, ...(await customizingWarnings(ctx, set.name, type, diff, payload))]
       method = "PATCH"
     } else if (args.operation === "DELETE") {
       if (!set.deletable) {
@@ -1056,18 +1137,26 @@ async function proposeChange(args: z.infer<(typeof schemas)["sap_propose_change"
         return errorResult(`${set.name} does not allow inserts ($metadata: Insertable=false).`)
       }
 
-      payload = {}
+      const requested: Record<string, unknown> = {}
+      const related: Record<string, unknown> = {}
       for (const [name, value] of Object.entries(changes)) {
         const nav = resolveNavigation(catalog, type, name)
         if (nav && !("name" in resolveProperty(type, name, { fuzzy: false }))) {
-          payload[nav.name] = value
-          diff.push({ field: nav.name, current: "—", next: display(value) })
+          related[nav.name] = value
           continue
         }
-        const property = changeProperty(type, set.name, name, ctx)
-        payload[property.name] = convertValue(property, value)
-        diff.push({ field: property.name, label: property.label, current: "—", next: display(payload[property.name]) })
+        requested[changeProperty(type, set.name, name, ctx).name] = value
       }
+      // Units, ISO units and currencies as for an update; a quantity without its unit is refused.
+      const resolver = await codeResolver(ctx, catalog, type, Object.keys(requested))
+      const prepared = prepareChange(type, requested, resolver)
+      conversions = prepared.notes
+      const converted: Record<string, unknown> = {}
+      for (const [name, value] of Object.entries(prepared.values)) converted[name] = convertValue(propertyOf(name), value)
+      const completed = completeChange(type, prepared, converted, null, resolver)
+      payload = { ...completed.payload, ...related }
+      diff = [...completed.rows, ...Object.entries(related).map(([name, value]) => ({ field: name, current: "—", next: display(value) }))]
+      warnings = [...completed.warnings, ...(await customizingWarnings(ctx, set.name, type, completed.rows, completed.payload))]
 
       // C0(c): the target must not exist yet (root records with a complete key).
       if (!parent && type.keys.every((key) => key in payload!)) {
@@ -1084,6 +1173,7 @@ async function proposeChange(args: z.infer<(typeof schemas)["sap_propose_change"
     }
   } catch (error) {
     if (error instanceof SapSessionExpiredError || error instanceof SapTransportError) throw error
+    if (error instanceof ChangeInputError) return errorResult(error.message, "Change not prepared: check the values")
     return errorResult((error as Error).message)
   }
 
@@ -1099,7 +1189,7 @@ async function proposeChange(args: z.infer<(typeof schemas)["sap_propose_change"
       path,
       etag,
       payload: payload ? JSON.stringify(payload) : null,
-      diff: JSON.stringify(diff),
+      diff: serializePlanDiff(diff, warnings),
       reason: args.reason,
       expiresAt,
     },
@@ -1113,6 +1203,7 @@ async function proposeChange(args: z.infer<(typeof schemas)["sap_propose_change"
     path,
     reason: args.reason,
     diff,
+    warnings,
     systemName: ctx.system.name,
     sapClient: ctx.system.sapClient,
     environment: ctx.system.environment,
@@ -1124,17 +1215,22 @@ async function proposeChange(args: z.infer<(typeof schemas)["sap_propose_change"
     expiresAt: expiresAt.toISOString(),
   })
 
+  const changedRows = diff.filter((row) => !row.sentAlong)
+  const sentAlong = diff.filter((row) => row.sentAlong)
   return {
     content: output({
       status: "AWAITING_USER_APPROVAL",
       planId: plan.id,
       operation: args.operation,
       request: `${method} ${path}`,
-      changes: diff,
-      note: "Nothing has been sent to SAP. The user approves or rejects this Change Plan with the buttons shown in the app. Tell them it is waiting for their approval; do not claim the change was made and do not ask them to type APPROVE.",
+      changes: changedRows,
+      ...(sentAlong.length ? { sentAlong: sentAlong.map((row) => ({ field: row.field, label: row.label, value: row.next, why: row.note })) } : {}),
+      ...(conversions.length ? { conversions } : {}),
+      ...(warnings.length ? { warnings } : {}),
+      note: `Nothing has been sent to SAP. The user approves or rejects this Change Plan with the buttons shown in the app. Tell them it is waiting for their approval${warnings.length ? " and explain the warnings in business terms" : ""}; do not claim the change was made and do not ask them to type APPROVE.`,
     }),
     isError: false,
-    summary: `Waiting for your approval (${diff.length} field${diff.length === 1 ? "" : "s"})`,
+    summary: `Waiting for your approval (${changedRows.length} field${changedRows.length === 1 ? "" : "s"}${sentAlong.length ? ` + ${sentAlong.length} sent along` : ""}${warnings.length ? `, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}` : ""})`,
   }
 }
 
@@ -1145,7 +1241,7 @@ export function toolLabel(name: string, rawArgs: Record<string, unknown>): strin
   const args = readToolArguments(name, rawArgs)
   const keys = (raw: unknown) => {
     const object = parseObject(raw)
-    return object ? Object.values(object).map(String).join(", ") : raw ? String(raw) : ""
+    return object ? Object.values(object).map(String).filter(Boolean).join(", ") : raw ? String(raw) : ""
   }
   const operation = OPERATION_LABELS[String(args.operation).toUpperCase() as keyof typeof OPERATION_LABELS] ?? "Change"
   switch (name) {

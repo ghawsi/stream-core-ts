@@ -18,10 +18,21 @@ type PlanRow = {
   sapSystem: { name: string; sapClient: string; environment: string }
 }
 
+/** Plan rows and warnings as stored in SapChangePlan.diff: {rows, warnings}, or a plain row array (older plans). */
+export function serializePlanDiff(rows: ChangePlanDiff[], warnings: string[]) {
+  return JSON.stringify(warnings.length ? { rows, warnings } : rows)
+}
+
 export function toChangePlanView(plan: PlanRow): ChangePlanView {
   let diff: ChangePlanDiff[] = []
+  let warnings: string[] = []
   try {
-    diff = JSON.parse(plan.diff) as ChangePlanDiff[]
+    const stored = JSON.parse(plan.diff) as ChangePlanDiff[] | { rows?: ChangePlanDiff[]; warnings?: string[] }
+    if (Array.isArray(stored)) diff = stored
+    else {
+      diff = stored.rows ?? []
+      warnings = stored.warnings ?? []
+    }
   } catch {
     diff = []
   }
@@ -35,6 +46,7 @@ export function toChangePlanView(plan: PlanRow): ChangePlanView {
     path: plan.path,
     reason: plan.reason,
     diff,
+    warnings,
     systemName: plan.sapSystem.name,
     sapClient: plan.sapSystem.sapClient,
     environment: plan.sapSystem.environment,

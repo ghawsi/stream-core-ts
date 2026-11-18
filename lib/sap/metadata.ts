@@ -15,11 +15,30 @@ export type PropertyInfo = {
   maxLength?: number
   precision?: number
   scale?: number
+  /** Scale="variable": the decimals depend on the currency or unit of the value. */
+  variableScale?: boolean
   nullable: boolean
   label?: string
   computed?: boolean
   immutable?: boolean
+  /** Quantity: the property holding its SAP unit (Measures.Unit), e.g. GrossWeight → WeightUnit. */
+  unitProperty?: string
+  /** Quantity: the property holding its ISO unit (Measures.UNECEUnit), e.g. GrossWeight → WeightISOUnit. */
+  isoUnitProperty?: string
+  /** Amount: the property holding its currency (Measures.ISOCurrency), e.g. StandardPrice → Currency. */
+  currencyProperty?: string
+  /** Common.IsUnit: the property is a unit of measure. */
+  isUnit?: boolean
+  /** Common.IsCurrency: the property is a currency code. */
+  isCurrency?: boolean
+  /** Common.IsUpperCase: SAP stores the value in upper case only. */
+  upperCase?: boolean
+  /** Common.IsDigitSequence: the value consists of digits only. */
+  digitsOnly?: boolean
 }
+
+/** Where SAP's code lists for units of measure and currencies are (CodeList vocabulary on the container). */
+export type CodeListReference = { url: string; collectionPath: string }
 
 export type NavigationInfo = {
   name: string
@@ -49,6 +68,8 @@ export type EntitySetInfo = {
 export type ServiceCatalog = {
   entitySets: EntitySetInfo[]
   entityTypes: Map<string, EntityTypeInfo>
+  /** Code lists the service refers to, with URLs relative to its $metadata. */
+  codeLists?: { units?: CodeListReference; currencies?: CodeListReference }
   fetchedAt: number
 }
 
@@ -96,6 +117,41 @@ function annotationFlag(xml: string, term: string): boolean | undefined {
   return undefined
 }
 
+/** The Path of an annotation such as <Annotation Term="SAP__measures.Unit" Path="WeightUnit"/>. */
+function annotationPath(xml: string, term: string): string | undefined {
+  for (const annotation of elements(xml, "Annotation")) {
+    if (annotation.attrs.Term?.endsWith(`.${term}`) && annotation.attrs.Path) return annotation.attrs.Path
+  }
+  return undefined
+}
+
+/** A record annotation's string properties, e.g. CodeList.UnitsOfMeasure {Url, CollectionPath}. */
+function annotationRecord(xml: string, term: string): Record<string, string> | undefined {
+  for (const annotation of elements(xml, "Annotation")) {
+    if (!annotation.attrs.Term?.endsWith(`.${term}`)) continue
+    const record: Record<string, string> = {}
+    for (const value of elements(annotation.inner, "PropertyValue")) {
+      if (value.attrs.Property && value.attrs.String !== undefined) record[value.attrs.Property] = value.attrs.String
+    }
+    return record
+  }
+  return undefined
+}
+
+/** Reads the semantic annotations of a property (inline or external) into it. */
+function applyPropertyAnnotations(property: PropertyInfo, xml: string) {
+  property.label ??= annotationString(xml, "Label")
+  property.computed ??= annotationFlag(xml, "Computed")
+  property.immutable ??= annotationFlag(xml, "Immutable")
+  property.unitProperty ??= annotationPath(xml, "Unit")
+  property.isoUnitProperty ??= annotationPath(xml, "UNECEUnit")
+  property.currencyProperty ??= annotationPath(xml, "ISOCurrency")
+  property.isUnit ??= annotationFlag(xml, "IsUnit")
+  property.isCurrency ??= annotationFlag(xml, "IsCurrency")
+  property.upperCase ??= annotationFlag(xml, "IsUpperCase")
+  property.digitsOnly ??= annotationFlag(xml, "IsDigitSequence")
+}
+
 /** e.g. InsertRestrictions/Insertable = false inside a Record. */
 function restriction(xml: string, term: string, property: string): boolean | undefined {
   for (const annotation of elements(xml, "Annotation")) {
@@ -126,17 +182,25 @@ export function parseCsdl(xml: string): ServiceCatalog {
       const name = type.attrs.Name
       const keyBlock = elements(type.inner, "Key")[0]?.inner ?? ""
       const keys = elements(keyBlock, "PropertyRef").map((ref) => ref.attrs.Name)
-      const properties: PropertyInfo[] = elements(type.inner, "Property").map((property) => ({
-        name: property.attrs.Name,
-        type: property.attrs.Type,
-        maxLength: property.attrs.MaxLength && property.attrs.MaxLength !== "max" ? Number(property.attrs.MaxLength) : undefined,
-        precision: property.attrs.Precision ? Number(property.attrs.Precision) : undefined,
-        scale: property.attrs.Scale && /^\d+$/.test(property.attrs.Scale) ? Number(property.attrs.Scale) : undefined,
-        nullable: property.attrs.Nullable !== "false",
-        label: annotationString(property.inner, "Label"),
-        computed: annotationFlag(property.inner, "Computed"),
-        immutable: annotationFlag(property.inner, "Immutable"),
-      }))
+      const properties: PropertyInfo[] = elements(type.inner, "Property").map((property) => {
+        const info: PropertyInfo = {
+          name: property.attrs.Name,
+          type: property.attrs.Type,
+          maxLength: property.attrs.MaxLength && property.attrs.MaxLength !== "max" ? Number(property.attrs.MaxLength) : undefined,
+          precision: property.attrs.Precision ? Number(property.attrs.Precision) : undefined,
+          // Edm.Decimal without Scale has scale 0; "variable" depends on the currency or unit.
+          scale:
+            property.attrs.Scale && /^\d+$/.test(property.attrs.Scale)
+              ? Number(property.attrs.Scale)
+              : property.attrs.Type === "Edm.Decimal" && property.attrs.Scale === undefined
+                ? 0
+                : undefined,
+          variableScale: property.attrs.Scale === "variable" || undefined,
+          nullable: property.attrs.Nullable !== "false",
+        }
+        applyPropertyAnnotations(info, property.inner)
+        return info
+      })
       const navigation: NavigationInfo[] = elements(type.inner, "NavigationProperty").map((nav) => {
         const rawType = nav.attrs.Type ?? ""
         const collection = rawType.startsWith("Collection(")
@@ -165,19 +229,26 @@ export function parseCsdl(xml: string): ServiceCatalog {
     }
   }
 
-  // External annotations (Target="ns.Type/Property") add labels and flags.
+  // External annotations (Target="ns.Type/Property") add labels, flags and unit/currency references.
   for (const type of entityTypes.values()) {
     type.label ??= annotationString(targetAnnotations.get(type.qualifiedName) ?? "", "Label")
     for (const property of type.properties) {
       const external = targetAnnotations.get(`${type.qualifiedName}/${property.name}`)
-      if (!external) continue
-      property.label ??= annotationString(external, "Label")
-      property.computed ??= annotationFlag(external, "Computed")
-      property.immutable ??= annotationFlag(external, "Immutable")
+      if (external) applyPropertyAnnotations(property, external)
     }
   }
 
-  return { entitySets, entityTypes, fetchedAt: Date.now() }
+  // Code lists for units and currencies, annotated on the entity container.
+  const codeLists: NonNullable<ServiceCatalog["codeLists"]> = {}
+  for (const [target, xml] of targetAnnotations) {
+    if (target.includes("/")) continue
+    const units = annotationRecord(xml, "UnitsOfMeasure")
+    const currencies = annotationRecord(xml, "CurrencyCodes")
+    if (units?.Url && units.CollectionPath) codeLists.units ??= { url: units.Url, collectionPath: units.CollectionPath }
+    if (currencies?.Url && currencies.CollectionPath) codeLists.currencies ??= { url: currencies.Url, collectionPath: currencies.CollectionPath }
+  }
+
+  return { entitySets, entityTypes, ...(codeLists.units || codeLists.currencies ? { codeLists } : {}), fetchedAt: Date.now() }
 }
 
 // ---------- loading ----------

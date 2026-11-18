@@ -62,6 +62,8 @@ export function ChangePlanCard({
   const pending = plan.status === "PENDING"
   const status = STATUS[plan.status]
   const title = `${OPERATION_LABELS[plan.operation]} ${describeODataPath(plan.path)}`
+  const changed = plan.diff.filter((item) => !item.sentAlong)
+  const sentAlong = plan.diff.filter((item) => item.sentAlong)
 
   async function decide(decision: "approve" | "reject") {
     setBusy(decision)
@@ -116,6 +118,20 @@ export function ChangePlanCard({
 
         <p className="text-sm">{plan.reason}</p>
 
+        {pending && plan.warnings.length > 0 ? (
+          <Alert>
+            <TriangleAlertIcon aria-hidden="true" />
+            <AlertTitle>Check before you approve</AlertTitle>
+            <AlertDescription>
+              <ul className="grid list-disc gap-1 pl-4">
+                {plan.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         <div className="overflow-hidden rounded-lg border">
           <Table>
             <TableHeader>
@@ -126,7 +142,7 @@ export function ChangePlanCard({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {plan.diff.map((item) => (
+              {changed.map((item) => (
                 <TableRow key={item.field}>
                   <TableCell className="whitespace-normal">
                     <div className="font-medium">{item.label ?? item.field}</div>
@@ -134,6 +150,23 @@ export function ChangePlanCard({
                   </TableCell>
                   <TableCell className="font-mono text-xs whitespace-normal break-all text-muted-foreground">{item.current}</TableCell>
                   <TableCell className="font-mono text-xs font-medium whitespace-normal break-all">{item.next}</TableCell>
+                </TableRow>
+              ))}
+              {sentAlong.length > 0 ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={3} className="bg-muted/50 py-1.5 text-xs whitespace-normal text-muted-foreground">
+                    Sent along unchanged, because SAP needs them together with the change
+                  </TableCell>
+                </TableRow>
+              ) : null}
+              {sentAlong.map((item) => (
+                <TableRow key={item.field} className="text-muted-foreground">
+                  <TableCell className="whitespace-normal">
+                    <div>{item.label ?? item.field}</div>
+                    {item.label ? <div className="font-mono text-xs">{item.field}</div> : null}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs whitespace-normal break-all">{item.current}</TableCell>
+                  <TableCell className="font-mono text-xs whitespace-normal break-all">{item.next}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

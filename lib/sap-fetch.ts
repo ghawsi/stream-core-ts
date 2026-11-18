@@ -25,6 +25,8 @@ export type SapSignInRequest = {
   systemId: string
   systemName: string
   message: string
+  /** The system is reached over unencrypted http; the modal warns before the password is typed. */
+  plainHttp?: boolean
   /** Called by the modal: true after a successful sign-in, false when cancelled. */
   settle: (signedIn: boolean) => void
 }
@@ -54,7 +56,7 @@ export const sapSignInStore = {
 }
 
 /** Opens the SAP sign-in modal for a system. Resolves true once signed in, false if cancelled. */
-export function requestSapSignIn(info: { systemId: string; systemName: string; message?: string }): Promise<boolean> {
+export function requestSapSignIn(info: { systemId: string; systemName: string; message?: string; plainHttp?: boolean }): Promise<boolean> {
   const pending = pendingBySystem.get(info.systemId)
   if (pending) return pending
 
@@ -63,6 +65,7 @@ export function requestSapSignIn(info: { systemId: string; systemName: string; m
       systemId: info.systemId,
       systemName: info.systemName,
       message: info.message ?? `Sign in to ${info.systemName} to continue.`,
+      plainHttp: info.plainHttp,
       settle: (signedIn) => {
         pendingBySystem.delete(info.systemId)
         queue = queue.filter((item) => item !== request)
@@ -111,7 +114,7 @@ export async function fetchWithSapSignIn(url: string, options: SapFetchOptions =
     const body: unknown = await response.clone().json().catch(() => null)
     if (!isSapAuthRequired(body) || attempt >= maxSignInAttempts) return response
 
-    const signedIn = await requestSapSignIn({ systemId: body.systemId, systemName: body.systemName, message: body.message })
+    const signedIn = await requestSapSignIn({ systemId: body.systemId, systemName: body.systemName, message: body.message, plainHttp: body.plainHttp })
     if (!signedIn) throw new SapAuthCancelledError(body.systemId, body.systemName)
   }
 }

@@ -31,7 +31,16 @@ const MAX_HEIGHT_PX = 240 // about eight lines, then the textarea scrolls
 const NO_SYSTEM = "none"
 
 /** An SAP system the chat can query (configured in /settings/sap/systems). */
-export type SapSystemOption = { id: string; name: string; sapClient: string; environment: string; isActive: boolean; servicePath: string }
+export type SapSystemOption = {
+  id: string
+  name: string
+  sapClient: string
+  environment: string
+  isActive: boolean
+  servicePath: string
+  /** Reached over unencrypted http (test systems only). */
+  plainHttp: boolean
+}
 
 export type ClaudePromptInputProps = {
   value: string
@@ -198,6 +207,7 @@ function SapSystemPicker({
                     <span className="truncate">{system.name}</span>
                     <span className="text-xs text-muted-foreground">
                       {businessAreaFor(system.servicePath).title} · client {system.sapClient} · {system.environment}
+                      {system.plainHttp ? " · unencrypted http" : ""}
                       {system.isActive ? "" : " · turned off"}
                     </span>
                   </span>

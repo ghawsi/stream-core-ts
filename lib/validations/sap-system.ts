@@ -5,7 +5,11 @@ export const DEFAULT_SERVICE_PATH = "/sap/opu/odata4/"
 /** Development, quality assurance, production. PRD change plans carry a warning. */
 export const SAP_ENVIRONMENTS = ["DEV", "QAS", "PRD"] as const
 
-/** https://host[:port][/prefix] without credentials, query or fragment; no trailing slash. */
+/**
+ * https://host[:port][/prefix] without credentials, query or fragment; no
+ * trailing slash. http:// is accepted for DEV and QAS test systems only (see
+ * the check on the whole schema and plainHttpProblem in lib/sap/odata.ts).
+ */
 const baseUrl = z
   .string()
   .trim()
@@ -38,20 +42,31 @@ const servicePath = z
   .refine((value) => !value.split("/").includes(".."), "The path cannot contain ..")
   .transform((value) => value.replace(/\/+$/, "") || "/")
 
-export const sapSystemSchema = z.object({
-  name: z.string().trim().min(1, "Enter a name.").max(100, "Use at most 100 characters."),
-  description: z
-    .string()
-    .trim()
-    .max(500, "Use at most 500 characters.")
-    .default("")
-    .transform((value) => value || null),
-  baseUrl,
-  sapClient: z.string().trim().regex(/^\d{3}$/, "The SAP client has three digits, for example 100."),
-  servicePath,
-  environment: z.enum(SAP_ENVIRONMENTS, { error: "Choose DEV, QAS or PRD." }).default("DEV"),
-  isActive: z.boolean().default(true),
-})
+export const sapSystemSchema = z
+  .object({
+    name: z.string().trim().min(1, "Enter a name.").max(100, "Use at most 100 characters."),
+    description: z
+      .string()
+      .trim()
+      .max(500, "Use at most 500 characters.")
+      .default("")
+      .transform((value) => value || null),
+    baseUrl,
+    sapClient: z.string().trim().regex(/^\d{3}$/, "The SAP client has three digits, for example 100."),
+    servicePath,
+    environment: z.enum(SAP_ENVIRONMENTS, { error: "Choose DEV, QAS or PRD." }).default("DEV"),
+    isActive: z.boolean().default(true),
+  })
+  .superRefine((value, ctx) => {
+    // Plain http sends SAP passwords and business data unencrypted: test systems only.
+    if (value.environment === "PRD" && /^http:\/\//i.test(value.baseUrl)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["baseUrl"],
+        message: "Production systems need https://. Plain http would send SAP passwords and business data unencrypted.",
+      })
+    }
+  })
 
 export type SapSystemInput = z.input<typeof sapSystemSchema>
 export type SapSystemValues = z.output<typeof sapSystemSchema>

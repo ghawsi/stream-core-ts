@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db"
 import type { SapSessionPayload } from "@/lib/sap-session"
-import { cookieHeader, describeNetworkError, mergeSetCookies, normaliseServicePath, type SapSystemTarget } from "@/lib/sap/odata"
+import { cookieHeader, describeNetworkError, mergeSetCookies, normaliseServicePath, plainHttpProblem, type SapSystemTarget } from "@/lib/sap/odata"
 
 /**
  * Server-side OData V4 client for one SAP system, acting with the signed-in
@@ -202,6 +202,12 @@ export class SapClient {
     const url = `${this.root()}${relativePath}`
     const started = performance.now()
     const signal = this.signal ? AbortSignal.any([this.signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS)
+    // Checked before every request: credentials and data never go to a production system unencrypted.
+    const transportProblem = plainHttpProblem(this.system)
+    if (transportProblem) {
+      await this.log({ toolName, method, path: relativePath, payload: body, status: 0, error: transportProblem, durationMs: 0 })
+      throw new SapTransportError(transportProblem)
+    }
     let response: Response
     try {
       response = await fetch(url, { method, headers, body, redirect: "manual", cache: "no-store", signal })
@@ -210,7 +216,7 @@ export class SapClient {
       const message =
         (error as Error).name === "TimeoutError"
           ? `${this.system.name} did not answer within ${TIMEOUT_MS / 1000} seconds. For a write the outcome is unknown: read the record before trying again.`
-          : describeNetworkError(url, error).replace(/^Could not reach [^:]+/, `Could not reach ${this.system.name}`)
+          : describeNetworkError(url, error, this.system.name)
       await this.log({ toolName, method, path: relativePath, payload: body, status: 0, error: message, durationMs })
       if (this.signal?.aborted) throw error
       throw new SapTransportError(message)

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { XCircleIcon } from "lucide-react"
+import { TriangleAlertIcon, XCircleIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
   Alert,
@@ -14,6 +14,7 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
+  Checkbox,
   Field,
   FieldContent,
   FieldDescription,
@@ -63,12 +64,17 @@ function initialState(system: SapSystemRow | null): FormState {
     : { name: "", description: "", baseUrl: "", sapClient: "", servicePath: DEFAULT_SERVICE_PATH, environment: "DEV", isActive: true }
 }
 
+const isPlainHttp = (url: string) => /^http:\/\//i.test(url.trim())
+
 export function SapSystemForm({
   system,
+  plainHttpAllowed,
   onDone,
   onCancel,
 }: {
   system: SapSystemRow | null
+  /** Whether this server allows SAP systems on plain http at all (SAP_ALLOW_HTTP). */
+  plainHttpAllowed: boolean
   onDone: () => void
   onCancel?: () => void
 }) {
@@ -76,6 +82,10 @@ export function SapSystemForm({
   const [form, setForm] = React.useState<FormState>(() => initialState(system))
   const [errors, setErrors] = React.useState<FieldErrors>({})
   const [formError, setFormError] = React.useState<string | null>(null)
+  // Plain http is a deliberate choice: confirmed once, and already confirmed for a saved http system.
+  const [plainHttpAccepted, setPlainHttpAccepted] = React.useState(() => (system ? isPlainHttp(system.baseUrl) : false))
+  const [plainHttpError, setPlainHttpError] = React.useState(false)
+  const plainHttp = isPlainHttp(form.baseUrl)
   const [isSaving, startSaving] = React.useTransition()
   const id = React.useId()
   const fieldId = (name: string) => `${id}-${name}`
@@ -103,6 +113,16 @@ export function SapSystemForm({
     if (!parsed.success) {
       setErrors(fieldErrorsOf(parsed.error))
       setFormError("Check the highlighted fields.")
+      return
+    }
+    if (plainHttp && !plainHttpAllowed) {
+      setErrors({ baseUrl: ["This server does not allow unencrypted http connections to SAP (SAP_ALLOW_HTTP). Use https://."] })
+      setFormError("Check the highlighted fields.")
+      return
+    }
+    if (plainHttp && !plainHttpAccepted) {
+      setPlainHttpError(true)
+      setFormError("Confirm the unencrypted connection, or use https://.")
       return
     }
     startSaving(async () => {
@@ -188,10 +208,57 @@ export function SapSystemForm({
                 aria-describedby={describedBy("baseUrl", true)}
               />
               <FieldDescription id={fieldId("baseUrl-description")}>
-                Scheme, host and port of the SAP web dispatcher or ICM. The app server must be able to reach it.
+                Scheme, host and port of the SAP web dispatcher or ICM; the app server must be able to reach it. Use https://. If
+                the certificate comes from your company&apos;s own CA, the app server must trust that CA (operating system store or
+                TLS_EXTRA_CA_FILE). Plain http:// is possible for DEV and QAS test systems only.
               </FieldDescription>
               <FieldError id={fieldId("baseUrl-error")}>{error("baseUrl")}</FieldError>
             </Field>
+
+            {plainHttp ? (
+              !plainHttpAllowed ? (
+                <Alert variant="destructive" role="status">
+                  <TriangleAlertIcon aria-hidden="true" />
+                  <AlertTitle>http is turned off on this server</AlertTitle>
+                  <AlertDescription>
+                    The administrator has not allowed unencrypted connections to SAP (SAP_ALLOW_HTTP). Use https://.
+                  </AlertDescription>
+                </Alert>
+              ) : form.environment === "PRD" ? (
+                <Alert variant="destructive" role="status">
+                  <TriangleAlertIcon aria-hidden="true" />
+                  <AlertTitle>Production systems need https://</AlertTitle>
+                  <AlertDescription>Plain http would send SAP passwords and business data unencrypted.</AlertDescription>
+                </Alert>
+              ) : (
+                <Alert variant="destructive">
+                  <TriangleAlertIcon aria-hidden="true" />
+                  <AlertTitle>Unencrypted connection</AlertTitle>
+                  <AlertDescription className="grid gap-3">
+                    <p>
+                      With http, the SAP user name, password, session cookies and all business data travel in plain text
+                      between this app&apos;s server and SAP. Anyone who can read traffic on that network path can take them
+                      over. Use it only to test connectivity with a test system and a test user, never with a password you use
+                      elsewhere.
+                    </p>
+                    <Field orientation="horizontal" data-invalid={plainHttpError ? true : undefined}>
+                      <Checkbox
+                        id={fieldId("plainHttp")}
+                        checked={plainHttpAccepted}
+                        onCheckedChange={(checked) => {
+                          setPlainHttpAccepted(checked === true)
+                          setPlainHttpError(false)
+                        }}
+                        aria-invalid={plainHttpError ? true : undefined}
+                      />
+                      <FieldLabel htmlFor={fieldId("plainHttp")} className="font-normal">
+                        I understand that this connection is unencrypted and use it for testing only.
+                      </FieldLabel>
+                    </Field>
+                  </AlertDescription>
+                </Alert>
+              )
+            ) : null}
 
             <Field data-invalid={error("servicePath") ? true : undefined}>
               <FieldLabel htmlFor={fieldId("servicePath")}>API service path (OData V4)</FieldLabel>

@@ -58,7 +58,7 @@ export type SapSystemRow = {
 
 type ServiceDocument = { value?: { name: string; kind?: string }[] }
 
-export function SapSystemsView({ systems }: { systems: SapSystemRow[] }) {
+export function SapSystemsView({ systems, plainHttpAllowed }: { systems: SapSystemRow[]; plainHttpAllowed: boolean }) {
   const router = useRouter()
   const [editingId, setEditingId] = React.useState<string | null>(null)
   const [formKey, setFormKey] = React.useState(0)
@@ -192,7 +192,16 @@ export function SapSystemsView({ systems }: { systems: SapSystemRow[] }) {
                           {system.servicePath}
                         </div>
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{system.baseUrl}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {system.baseUrl}
+                        {/^http:\/\//i.test(system.baseUrl) ? (
+                          <div className="mt-1">
+                            <Badge variant="destructive" className="font-sans">
+                              http · unencrypted
+                            </Badge>
+                          </div>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="font-mono text-xs">
                         {system.sapClient}{" "}
                         <Badge variant={system.environment === "PRD" ? "destructive" : "outline"} className="ml-1">
@@ -274,6 +283,7 @@ export function SapSystemsView({ systems }: { systems: SapSystemRow[] }) {
         <SapSystemForm
           key={editing ? `edit-${editing.id}` : `new-${formKey}`}
           system={editing}
+          plainHttpAllowed={plainHttpAllowed}
           onDone={resetForm}
           onCancel={editing ? resetForm : undefined}
         />

@@ -45,7 +45,7 @@ export type ChatStreamEvent =
   | { type: "tool_start"; run: ToolRun }
   | { type: "tool_end"; run: ToolRun }
   | { type: "change_plan"; plan: ChangePlanView }
-  | { type: "sap_auth_required"; systemId: string; systemName: string }
+  | { type: "sap_auth_required"; systemId: string; systemName: string; plainHttp?: boolean }
 
 /** Title for a new chat: the first 50 characters of the first message, on one line. */
 export function deriveChatTitle(message: string): string {

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache"
 import { getAuthSession } from "@/lib/auth/session"
 import { prisma } from "@/lib/db"
 import { deleteAllSapSessions, deleteSapSession } from "@/lib/sap-session"
+import { plainHttpAllowedOnServer, usesPlainHttp } from "@/lib/sap/odata"
 import { sapSystemSchema, type SapSystemInput } from "@/lib/validations/sap-system"
 import { fieldErrorsOf, type FieldErrors } from "@/lib/validations/ai-config"
 
@@ -13,12 +14,18 @@ export type SapSystemActionResult = { ok: true; id?: string } | { ok: false; err
 const PAGE = "/settings/sap/systems"
 const signedOut: SapSystemActionResult = { ok: false, error: "Your session has ended. Sign in again." }
 const notFound: SapSystemActionResult = { ok: false, error: "This SAP system no longer exists." }
+const plainHttpOff: SapSystemActionResult = {
+  ok: false,
+  error: "Check the highlighted fields.",
+  fieldErrors: { baseUrl: ["This server does not allow unencrypted http connections to SAP (SAP_ALLOW_HTTP). Use https://."] },
+}
 
 export async function createSapSystem(input: SapSystemInput): Promise<SapSystemActionResult> {
   const authSession = await getAuthSession()
   if (!authSession) return signedOut
   const parsed = sapSystemSchema.safeParse(input)
   if (!parsed.success) return { ok: false, error: "Check the highlighted fields.", fieldErrors: fieldErrorsOf(parsed.error) }
+  if (usesPlainHttp(parsed.data.baseUrl) && !plainHttpAllowedOnServer()) return plainHttpOff
 
   const created = await prisma.sapSystem.create({
     data: { ...parsed.data, userId: authSession.user.id },
@@ -33,6 +40,7 @@ export async function updateSapSystem(id: string, input: SapSystemInput): Promis
   if (!authSession) return signedOut
   const parsed = sapSystemSchema.safeParse(input)
   if (!parsed.success) return { ok: false, error: "Check the highlighted fields.", fieldErrors: fieldErrorsOf(parsed.error) }
+  if (usesPlainHttp(parsed.data.baseUrl) && !plainHttpAllowedOnServer()) return plainHttpOff
 
   const existing = await prisma.sapSystem.findFirst({ where: { id, userId: authSession.user.id } })
   if (!existing) return notFound

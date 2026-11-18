@@ -6,6 +6,7 @@ import {
   basicAuthHeader,
   describeNetworkError,
   mergeSetCookies,
+  plainHttpProblem,
   sapError,
   serviceRootUrl,
   SAP_REQUEST_TIMEOUT_MS,
@@ -39,6 +40,10 @@ export async function POST(request: Request, context: Context) {
   const parsed = credentialsSchema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return sapError(400, "INVALID_REQUEST", parsed.error.issues[0]?.message ?? "Invalid request.")
 
+  // Checked before the password is put on the wire.
+  const transportProblem = plainHttpProblem(system)
+  if (transportProblem) return sapError(403, "SAP_PLAIN_HTTP_BLOCKED", transportProblem)
+
   const authHeader = basicAuthHeader(parsed.data.username, parsed.data.password)
   const url = serviceRootUrl(system)
 
@@ -52,7 +57,7 @@ export async function POST(request: Request, context: Context) {
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(SAP_REQUEST_TIMEOUT_MS)]),
     })
   } catch (error) {
-    return sapError(502, "SAP_UNREACHABLE", describeNetworkError(url, error))
+    return sapError(502, "SAP_UNREACHABLE", describeNetworkError(url, error, system.name))
   }
   // The service document is not needed; free the connection.
   await response.body?.cancel().catch(() => {})

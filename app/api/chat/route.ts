@@ -11,7 +11,7 @@ import { prisma } from "@/lib/db"
 import { readSapSession, type SapSessionPayload } from "@/lib/sap-session"
 import type { AssistantMessageMetadata, ToolRun } from "@/lib/sap/agent-types"
 import { SapClient } from "@/lib/sap/client"
-import { authRequiredResponse } from "@/lib/sap/odata"
+import { authRequiredResponse, plainHttpProblem, usesPlainHttp } from "@/lib/sap/odata"
 import { findOwnedSapSystem } from "@/lib/sap/systems"
 import { chatRequestSchema, DEFAULT_CHAT_TITLE, deriveChatTitle, type ChatStreamEvent } from "@/lib/validations/chat"
 
@@ -62,6 +62,8 @@ export async function POST(request: Request) {
     const system = await findOwnedSapSystem(sapSystemId, authSession.user.id)
     if (!system) return jsonError(404, "This SAP system does not exist.", "SAP_SYSTEM_NOT_FOUND")
     if (!system.isActive) return jsonError(409, `${system.name} is turned off in the SAP system settings.`, "SAP_SYSTEM_INACTIVE")
+    const transportProblem = plainHttpProblem(system)
+    if (transportProblem) return jsonError(403, transportProblem, "SAP_PLAIN_HTTP_BLOCKED")
     const sapSession = await readSapSession(system.id, authSession)
     if (!sapSession) return authRequiredResponse(system)
     sap = { system, sapSession, userId: authSession.user.id }
@@ -197,7 +199,12 @@ export async function POST(request: Request) {
                   send(event)
                   break
                 case "sap_auth_required":
-                  send({ type: "sap_auth_required", systemId: system.id, systemName: system.name })
+                  send({
+                    type: "sap_auth_required",
+                    systemId: system.id,
+                    systemName: system.name,
+                    ...(usesPlainHttp(system.baseUrl) ? { plainHttp: true } : {}),
+                  })
                   break
               }
             },

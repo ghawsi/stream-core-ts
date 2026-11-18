@@ -11,7 +11,7 @@ import { ChatUIProvider } from "./_components/chat-ui-context"
 
 export const metadata: Metadata = {
   title: "SAP S/4HANA AI Chat",
-  description: "Chat with the configured AI model about SAP S/4HANA development and processes.",
+  description: "Ask about SAP S/4HANA business processes and work with live business data in plain business language.",
 }
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {

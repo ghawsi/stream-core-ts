@@ -6,6 +6,8 @@ import { usePathname } from "next/navigation"
 import { BotIcon } from "lucide-react"
 import { Button, cn, Tooltip, TooltipContent, TooltipTrigger } from "@boilerplate/ui"
 
+import { RailAccount } from "./rail-account"
+import { railButtonClass } from "./rail-styles"
 import { APP_SECTIONS, appSectionFor, type AppSection, type AppSectionKey } from "./sections"
 
 /**
@@ -36,14 +38,7 @@ function RailLink({ section, current }: { section: AppSection; current: boolean 
           asChild
           variant="ghost"
           size="icon-lg"
-          className={cn(
-            "relative border-2",
-            // Current page: three signals, never colour alone: the selected
-            // fill, a visible border, and a heavier glyph.
-            current
-              ? "border-sidebar-border bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent"
-              : "border-transparent text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          )}
+          className={railButtonClass(current)}
         >
           <Link href={section.href} aria-label={section.label} aria-current={current ? "page" : undefined}>
             <Icon aria-hidden="true" className="size-5" strokeWidth={current ? 2.75 : 2} />
@@ -62,7 +57,11 @@ function RailGroups({ currentKey }: { currentKey: AppSectionKey | undefined }) {
   const group = (name: AppSection["group"]) =>
     APP_SECTIONS.filter((section) => section.group === name).map((section) => (
       <li key={section.key}>
-        <RailLink section={section} current={section.key === currentKey} />
+        {section.key === "account" ? (
+          <RailAccount current={section.key === currentKey} />
+        ) : (
+          <RailLink section={section} current={section.key === currentKey} />
+        )}
       </li>
     ))
 
@@ -80,8 +79,8 @@ function CurrentRailGroups() {
 }
 
 /**
- * The application's collapsed sidebar: an icon rail. Day-to-day sections at
- * the top; settings pinned to the foot.
+ * The application's collapsed sidebar: an icon rail on every page. Home and
+ * chat at the top; account and settings pinned to the foot.
  */
 export function AppSidebar() {
   return (

@@ -8,7 +8,7 @@ import { AiSettingsView } from "./_components/ai-settings-view"
 
 export const metadata: Metadata = {
   title: "AI model settings",
-  description: "Add local Ollama models or remote LLM providers, test them, and choose the model the SAP S/4HANA AI Chat uses.",
+  description: "Add local or remote AI models (Ollama, OpenAI, Claude, Gemini, DeepSeek and more), test them, and choose the model the chat uses.",
 }
 
 export default function AiSettingsPage() {
@@ -17,8 +17,9 @@ export default function AiSettingsPage() {
       <div className="grid gap-1">
         <h2 className="text-2xl font-semibold tracking-tight">AI models</h2>
         <p className="text-muted-foreground">
-          Add a model running locally in Ollama or a remote one from OpenAI, Anthropic Claude, Azure OpenAI or an
-          OpenAI-compatible endpoint, test it, and choose the model the chat uses.
+          Add a model running locally (Ollama, LM Studio, vLLM) or a remote one from OpenAI, Anthropic Claude, Google
+          Gemini, Azure OpenAI, DeepSeek, Mistral, Groq, OpenRouter or any other OpenAI-compatible API. Test it, and
+          choose the model the chat uses.
         </p>
       </div>
       <Suspense fallback={<SettingsSkeleton />}>

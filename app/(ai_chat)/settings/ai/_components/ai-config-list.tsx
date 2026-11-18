@@ -37,7 +37,7 @@ import {
 } from "@boilerplate/ui"
 
 import { activateAiConfig, deleteAiConfig, type AiConfigSummary } from "@/app/actions/ai-config"
-import { isAiProvider, PROVIDER_LABELS } from "@/lib/ai/provider-catalog"
+import { providerDisplayName } from "@/lib/ai/provider-catalog"
 
 export function AiConfigList({
   configs,
@@ -121,7 +121,7 @@ export function AiConfigList({
                   <TableRow key={config.id} data-state={config.id === editingId ? "selected" : undefined}>
                     <TableCell className="font-medium">{config.name}</TableCell>
                     <TableCell>
-                      <Badge variant="outline">{isAiProvider(config.provider) ? PROVIDER_LABELS[config.provider] : config.provider}</Badge>
+                      <Badge variant="outline">{providerDisplayName(config.provider, config.baseUrl)}</Badge>
                     </TableCell>
                     <TableCell className="font-mono text-xs">{config.modelName}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{config.maskedApiKey}</TableCell>

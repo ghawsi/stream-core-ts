@@ -33,6 +33,7 @@ import {
 
 import { createSapSystem, updateSapSystem } from "@/app/actions/sap-systems"
 import { fieldErrorsOf, type FieldErrors } from "@/lib/validations/ai-config"
+import { businessAreaFor } from "@/lib/sap/business"
 import { DEFAULT_SERVICE_PATH, SAP_ENVIRONMENTS, sapSystemSchema } from "@/lib/validations/sap-system"
 
 type SapEnvironment = (typeof SAP_ENVIRONMENTS)[number]
@@ -193,7 +194,7 @@ export function SapSystemForm({
             </Field>
 
             <Field data-invalid={error("servicePath") ? true : undefined}>
-              <FieldLabel htmlFor={fieldId("servicePath")}>OData V4 service path</FieldLabel>
+              <FieldLabel htmlFor={fieldId("servicePath")}>API service path (OData V4)</FieldLabel>
               <Input
                 {...text("servicePath")}
                 placeholder="/sap/opu/odata4/sap/api_salesorder/srvd_a2x/sap/salesorder/0001"
@@ -202,8 +203,11 @@ export function SapSystemForm({
                 aria-describedby={describedBy("servicePath", true)}
               />
               <FieldDescription id={fieldId("servicePath-description")}>
-                The service root below the base URL, as published in /IWFND/V4_ADMIN. Requests to
-                /api/sap/&lt;system&gt;/&lt;path&gt; are resolved against it.
+                {form.servicePath.trim().replace(/\/+$/, "") !== DEFAULT_SERVICE_PATH.replace(/\/+$/, "")
+                  ? `Business area: ${businessAreaFor(form.servicePath).title}. `
+                  : ""}
+                The released API the chat works with, for example Product or Sales Order from SAP Business Accelerator Hub
+                (api.sap.com). Your SAP Basis team finds its service root in /IWFND/V4_ADMIN.
               </FieldDescription>
               <FieldError id={fieldId("servicePath-error")}>{error("servicePath")}</FieldError>
             </Field>

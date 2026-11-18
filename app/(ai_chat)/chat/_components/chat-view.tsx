@@ -8,6 +8,7 @@ import { Button, cn, prefersReducedMotion, Separator, SidebarTrigger } from "@bo
 
 import type { ActiveModelSummary } from "@/lib/ai/active-model"
 import type { ToolRun } from "@/lib/sap/agent-types"
+import { businessAreaFor } from "@/lib/sap/business"
 import { fetchWithSapSignIn, requestSapSignIn, SapAuthCancelledError } from "@/lib/sap-fetch"
 import { readSse } from "@/lib/sse"
 import { DEFAULT_CHAT_TITLE, type ChatStreamEvent } from "@/lib/validations/chat"
@@ -15,17 +16,13 @@ import { ChatThread, type ChatUIMessage, type PlanUpdateHandler } from "./chat-t
 import { useChatUI } from "./chat-ui-context"
 import { ClaudePromptInput, type SapSystemOption } from "./claude-prompt-input"
 
+/** Questions business users ask, across finance, sales, procurement, production and master data. */
 const STARTER_PROMPTS = [
-  "Explain OData V4 $expand syntax",
-  "Draft an ABAP CDS view query",
-  "How do I create a RAP business object?",
-  "Compare BAPIs and released APIs in S/4HANA Cloud",
-]
-
-const SAP_STARTER_PROMPTS = [
-  "Show the product types and base units of the first 10 products",
-  "Which plants is product EF-MAT extended to?",
-  "Find products whose English description contains 'pump'",
+  "Walk me through the month-end closing steps",
+  "How does a sales order become an invoice?",
+  "What do I need to set up a new cost center?",
+  "What is the difference between a bill of material and a routing?",
+  "How do I create a new supplier?",
 ]
 
 type ChatViewProps = {
@@ -68,6 +65,7 @@ export function ChatView({
   }
   const [sapSystemId, setSapSystemId] = React.useState<string | null>(initialSapSystemId)
   const sapSystem = sapSystems?.find((system) => system.id === sapSystemId) ?? null
+  const area = sapSystem ? businessAreaFor(sapSystem.servicePath) : null
   const sessionIdRef = React.useRef(initialSessionId ?? null)
   const abortRef = React.useRef<AbortController | null>(null)
   const isEmpty = messages.length === 0
@@ -219,10 +217,12 @@ export function ChatView({
   const changeSapSystem = (id: string | null) => {
     setSapSystemId(id)
     const system = sapSystems?.find((item) => item.id === id)
-    if (system && !isEmpty) toast.info(`Product data questions now go to ${system.name} (client ${system.sapClient}).`)
+    if (system && !isEmpty) {
+      toast.info(`Questions about ${businessAreaFor(system.servicePath).data} now go to ${system.name} (client ${system.sapClient}).`)
+    }
   }
 
-  const starters = sapSystem ? SAP_STARTER_PROMPTS : STARTER_PROMPTS
+  const starters = area ? area.starters : STARTER_PROMPTS
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -235,11 +235,11 @@ export function ChatView({
       <div className={cn("flex min-h-0 flex-1 flex-col", isEmpty && "items-center justify-center gap-6 overflow-y-auto px-4 pb-24")}>
         {isEmpty ? (
           <div className="grid gap-2 text-center">
-            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">How can I help with SAP S/4HANA today?</h2>
+            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">What can I help you with in SAP today?</h2>
             <p className="text-muted-foreground">
-              {sapSystem
-                ? `Read and update product master data in ${sapSystem.name} (client ${sapSystem.sapClient}, ${sapSystem.environment}). Every change needs your approval.`
-                : "Ask about ABAP, CDS views, RAP, OData services or business processes. Pick an SAP system below to work with live product data."}
+              {sapSystem && area
+                ? `Look up and update ${area.data} in ${sapSystem.name} (client ${sapSystem.sapClient}, ${sapSystem.environment}). Every change needs your approval.`
+                : "Ask about business processes, master data, orders and postings in plain business language. Pick an SAP system below to look up and change live data."}
             </p>
           </div>
         ) : (
@@ -258,7 +258,7 @@ export function ChatView({
             sapSystems={sapSystems}
             sapSystemId={sapSystemId}
             onSapSystemChange={changeSapSystem}
-            placeholder={sapSystem ? `Ask about product master data in ${sapSystem.name}…` : undefined}
+            placeholder={sapSystem && area ? `Ask about ${area.data} in ${sapSystem.name}…` : undefined}
             autoFocus
           />
           {!isEmpty ? (

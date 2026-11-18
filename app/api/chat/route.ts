@@ -3,8 +3,8 @@ import { revalidatePath } from "next/cache"
 import { getActiveProviderConfig } from "@/lib/ai/active-model"
 import { ProviderError, streamChatCompletion, type ProviderMessage } from "@/lib/ai/providers"
 import { runSapAgent } from "@/lib/ai/sap-agent"
-import { buildSapProductAgentPrompt } from "@/lib/ai/sap-product-prompt"
-import { SAP_SYSTEM_PROMPT } from "@/lib/ai/system-prompt"
+import { buildSapAgentPrompt } from "@/lib/ai/sap-agent-prompt"
+import { buildBusinessChatPrompt } from "@/lib/ai/system-prompt"
 import { getAuthSession } from "@/lib/auth/session"
 import { decrypt } from "@/lib/crypto"
 import { prisma } from "@/lib/db"
@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     return jsonError(500, error instanceof Error ? error.message : "The API key could not be decrypted.", "DECRYPT_FAILED")
   }
 
-  // SAP product-data tools: only for a signed-in user, on their own active
+  // SAP data tools: only for a signed-in user, on their own active
   // system, with a valid SAP session. Checked before anything is stored, so the
   // browser can sign in to SAP and resend the same message.
   let sap: {
@@ -108,6 +108,8 @@ export async function POST(request: Request) {
   // Providers expect the conversation to start with a user turn.
   while (messages.length > 0 && messages[0].role !== "user") messages.shift()
 
+  // The server's local date (YYYY-MM-DD), so "this month" means the user's month.
+  const today = new Date().toLocaleDateString("en-CA")
   const upstream = new AbortController()
   const encoder = new TextEncoder()
   let content = ""
@@ -169,7 +171,7 @@ export async function POST(request: Request) {
           const client = new SapClient(system, sap.sapSession, { userId: sap.userId, chatId: session.id }, upstream.signal)
           const result = await runSapAgent({
             config: { ...config, apiKey },
-            system: buildSapProductAgentPrompt(system),
+            system: buildSapAgentPrompt(system, today),
             history: messages.map((m) => (m.role === "user" ? { role: "user", content: m.content } : { role: "assistant", content: m.content, toolCalls: [] })),
             toolContext: {
               client,
@@ -206,7 +208,7 @@ export async function POST(request: Request) {
         } else {
           for await (const text of streamChatCompletion({
             config: { ...config, apiKey },
-            system: SAP_SYSTEM_PROMPT,
+            system: buildBusinessChatPrompt(today),
             messages,
             signal: upstream.signal,
           })) {

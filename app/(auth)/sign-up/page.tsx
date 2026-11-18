@@ -30,11 +30,13 @@ const SignUp = () => {
       setError(error.message ?? "Sign-up failed. Try again.")
       return
     }
-    router.push("/sign-in")
+    // Sign-up also signs the new user in.
+    router.replace("/")
+    router.refresh()
   }
 
   return (
-    <main className="flex min-h-svh items-center justify-center p-4">
+    <main className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-4">
       <Card className="w-full max-w-sm">
         <form onSubmit={handleSignUp}>
           <CardHeader>

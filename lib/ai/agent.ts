@@ -222,7 +222,7 @@ function portableSchema(schema: Record<string, unknown>): Record<string, unknown
   if (result.type === "object" && !result.properties) {
     return {
       type: "string",
-      description: `${typeof result.description === "string" ? `${result.description} ` : ""}Pass it as JSON text, for example {"Product":"EF-MAT"}.`,
+      description: `${typeof result.description === "string" ? `${result.description} ` : ""}Pass it as JSON text, for example {"Product":"<product number>"}.`,
     }
   }
   return result

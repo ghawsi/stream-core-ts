@@ -177,7 +177,7 @@ export async function POST(request: Request) {
             history: messages.map((m) => (m.role === "user" ? { role: "user", content: m.content } : { role: "assistant", content: m.content, toolCalls: [] })),
             toolContext: {
               client,
-              system: { id: system.id, name: system.name, sapClient: system.sapClient, environment: system.environment },
+              system: { id: system.id, name: system.name, sapClient: system.sapClient, environment: system.environment, servicePath: system.servicePath },
               userId: sap.userId,
               chatId: session.id,
             },

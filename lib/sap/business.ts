@@ -14,6 +14,8 @@ export type BusinessArea = {
   starters: readonly string[]
   /** Business rules for the agent prompt; orientation, confirmed against $metadata. */
   notes: readonly string[]
+  /** Fields this API does not let change, with the reason; the change tool refuses them. */
+  readOnlyFields?: readonly { entitySet: string; field: string; reason: string }[]
 }
 
 type AreaDefinition = BusinessArea & { match: RegExp }
@@ -131,12 +133,21 @@ const AREAS: readonly AreaDefinition[] = [
     data: "product master data",
     starters: ["Show the 10 most recently changed products", "Find products whose description contains 'pump'", "Which products are flagged for deletion?"],
     notes: [
-      "A product has descriptions per language and data per organizational level: plant (MRP, purchasing, storage locations), sales organization and distribution channel, valuation area, and units of measure (with EAN/GTIN).",
-      "Search products by text in their descriptions (language EN, or the user's language).",
+      "The root entity set is Product (client-level data). Descriptions are in _ProductDescription (per language); data per organizational level is in navigations such as _ProductPlant, _ProductSalesDelivery, _ProductValuation and _ProductUnitOfMeasure, or in the entity sets of the same names.",
+      "To list products, query Product. To show their names, expand _ProductDescription with a condition on Language (EN, or the user's language).",
+      "Search products by number with conditions on Product (startswith, contains), by name with conditions on ProductDescription in ProductDescription.",
       "Not in this API: long texts (basic data, sales, purchase order, inspection texts), classification and characteristics, retail articles.",
+      "The product type cannot be changed through this API; SAP offers the Fiori app Change Material Type for that.",
       "A new product needs its product number (no internal numbering here), product type, base unit, usually the industry sector, and at least one description of at most 40 characters.",
-      "A product cannot be deleted physically through this API: propose the deletion flag, explain that it is reversible and that physical removal only happens by archiving in SAP. Never delete the last description of a product.",
+      "Products and most of their organizational data cannot be deleted physically through this API: propose the deletion flag (IsMarkedForDeletion), explain that it is reversible and that physical removal only happens by archiving in SAP. Descriptions can be deleted, but never the last one.",
       "Authorization problems usually concern product master authorizations by product type, plant or sales organization.",
+    ],
+    readOnlyFields: [
+      {
+        entitySet: "Product",
+        field: "ProductType",
+        reason: "The product type cannot be changed through the Product API. Use the Fiori app Change Material Type instead.",
+      },
     ],
   },
 ]

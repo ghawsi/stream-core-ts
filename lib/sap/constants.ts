@@ -16,6 +16,8 @@ export type SapAuthRequiredBody = {
   systemId: string
   systemName: string
   message: string
+  /** The system is reached over unencrypted http: the sign-in dialog warns. */
+  plainHttp?: boolean
 }
 
 /** JSON body of other errors from /api/sap/... */
@@ -27,6 +29,7 @@ export type SapErrorBody = {
     | "SAP_INVALID_CREDENTIALS"
     | "SAP_UNREACHABLE"
     | "SAP_BAD_RESPONSE"
+    | "SAP_PLAIN_HTTP_BLOCKED"
     | "INVALID_REQUEST"
   message: string
 }

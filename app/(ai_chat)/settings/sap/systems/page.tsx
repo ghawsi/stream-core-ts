@@ -5,6 +5,7 @@ import { Skeleton } from "@boilerplate/ui"
 import { requireAuthSession } from "@/lib/auth/session"
 import { prisma } from "@/lib/db"
 import { connectedSapSystemIds } from "@/lib/sap-session"
+import { plainHttpAllowedOnServer } from "@/lib/sap/odata"
 import { SapSystemsView, type SapSystemRow } from "./_components/sap-systems-view"
 
 export const metadata: Metadata = {
@@ -42,7 +43,7 @@ async function SapSystemsData() {
     authSession
   )
   const rows: SapSystemRow[] = systems.map((system) => ({ ...system, connected: connected.has(system.id) }))
-  return <SapSystemsView systems={rows} />
+  return <SapSystemsView systems={rows} plainHttpAllowed={plainHttpAllowedOnServer()} />
 }
 
 function SystemsSkeleton() {

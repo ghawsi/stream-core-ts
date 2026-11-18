@@ -2,10 +2,11 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { EyeIcon, EyeOffIcon, KeyRoundIcon } from "lucide-react"
+import { EyeIcon, EyeOffIcon, KeyRoundIcon, TriangleAlertIcon } from "lucide-react"
 import {
   Alert,
   AlertDescription,
+  AlertTitle,
   Button,
   Dialog,
   DialogContent,
@@ -89,6 +90,17 @@ function SignInForm({ request }: { request: SapSignInRequest }) {
         </DialogTitle>
         <DialogDescription>{request.message}</DialogDescription>
       </DialogHeader>
+
+      {request.plainHttp ? (
+        <Alert variant="destructive">
+          <TriangleAlertIcon aria-hidden="true" />
+          <AlertTitle>Unencrypted connection (http)</AlertTitle>
+          <AlertDescription>
+            Your SAP password and session are sent in plain text between this app&apos;s server and {request.systemName}. Use a
+            test user for this test system, never a password you use elsewhere.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <FieldGroup>
         <Field>

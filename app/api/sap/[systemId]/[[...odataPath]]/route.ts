@@ -8,6 +8,7 @@ import {
   isSafeODataPath,
   mergeSetCookies,
   normaliseServicePath,
+  plainHttpProblem,
   sapError,
   serviceRootUrl,
   SAP_REQUEST_TIMEOUT_MS,
@@ -71,6 +72,8 @@ async function handle(request: Request, context: Context): Promise<Response> {
   if (!system) return sapError(404, "SAP_SYSTEM_NOT_FOUND", "This SAP system does not exist.")
   if (!system.isActive) return sapError(403, "SAP_SYSTEM_INACTIVE", `${system.name} is turned off in the SAP system settings.`)
   if (!isSafeODataPath(odataPath)) return sapError(400, "INVALID_REQUEST", "The OData path is not allowed.")
+  const transportProblem = plainHttpProblem(system)
+  if (transportProblem) return sapError(403, "SAP_PLAIN_HTTP_BLOCKED", transportProblem)
 
   let session = await readSapSession(system.id, authSession)
   if (!session) return authRequiredResponse(system)
@@ -156,7 +159,7 @@ async function handle(request: Request, context: Context): Promise<Response> {
     if ((error as Error).name === "TimeoutError") {
       return sapError(504, "SAP_UNREACHABLE", `${system.name} did not answer within ${SAP_REQUEST_TIMEOUT_MS / 1000} seconds.`)
     }
-    return sapError(502, "SAP_UNREACHABLE", describeNetworkError(target, error))
+    return sapError(502, "SAP_UNREACHABLE", describeNetworkError(target, error, system.name))
   }
 }
 

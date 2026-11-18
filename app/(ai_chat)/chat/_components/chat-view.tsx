@@ -155,6 +155,7 @@ export function ChatView({
                   systemId: event.systemId,
                   systemName: event.systemName,
                   message: `Your session on ${event.systemName} has ended. Sign in again, then resend your request.`,
+                  plainHttp: event.plainHttp,
                 })
               })
               break
